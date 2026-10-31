@@ -4,6 +4,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 // Security: contextIsolation is enabled and Node.js APIs are NOT exposed directly.
 const electronApi = {
   getStatus: () => ipcRenderer.invoke('app:get-status'),
+  getWhisperReadiness: () => ipcRenderer.invoke('whisper:get-readiness'),
+  validateWhisper: () => ipcRenderer.invoke('whisper:validate'),
   platform: process.platform,
 }
 

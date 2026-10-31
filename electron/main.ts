@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { whisperService } from './whisperService'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -59,7 +60,16 @@ ipcMain.handle('app:get-status', async () => {
   }
 })
 
-app.whenReady().then(() => {
+// Phase 2 Whisper IPC handlers: typed readiness and environment validation
+ipcMain.handle('whisper:get-readiness', async () => {
+  return await whisperService.getReadiness()
+})
+
+ipcMain.handle('whisper:validate', async () => {
+  return await whisperService.getReadiness()
+})
+
+app.whenReady().then(async () => {
   createWindow()
 
   if (process.env.TEST_LAUNCH === '1') {
@@ -76,7 +86,17 @@ app.whenReady().then(() => {
   })
 })
 
+// Ensure all child processes are cleaned up on shutdown
+app.on('before-quit', () => {
+  whisperService.dispose()
+})
+
+app.on('will-quit', () => {
+  whisperService.dispose()
+})
+
 app.on('window-all-closed', () => {
+  whisperService.dispose()
   if (process.platform !== 'darwin') {
     app.quit()
   }
