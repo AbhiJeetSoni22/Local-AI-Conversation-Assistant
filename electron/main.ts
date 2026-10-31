@@ -36,7 +36,7 @@ function createWindow(): void {
     minWidth: 720,
     minHeight: 520,
     title: 'Local AI Conversation Assistant',
-    backgroundColor: '#0f172a',
+    backgroundColor: '#0b0c0f',
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       // Security enforcement:

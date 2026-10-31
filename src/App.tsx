@@ -26,13 +26,14 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState<boolean>(false)
   const [streamMeta, setStreamMeta] = useState<{ durationMs?: number; model?: string; isCancelled?: boolean } | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
+  const [copied, setCopied] = useState<boolean>(false)
 
   useEffect(() => {
     if (window.electronApi) {
       // 1. Fetch app status
       window.electronApi.getStatus()
         .then((info) => {
-          setSystemInfo(`${info.platform} (v${info.version}) • Electron Main IPC Active`)
+          setSystemInfo(`${info.platform} (v${info.version}) • Electron IPC Active`)
         })
         .catch(() => {
           setSystemInfo('Electron IPC available')
@@ -193,287 +194,407 @@ export default function App() {
     setValidationError(null)
   }
 
-  const getStatusBadgeClass = () => {
-    switch (status) {
-      case 'Generating':
-        return 'status-badge status-generating'
-      case 'Listening':
-        return 'status-badge status-listening'
-      case 'Stopped':
-        return 'status-badge status-stopped'
-      case 'Idle':
-      default:
-        return 'status-badge status-idle'
-    }
+  const handleCopyAnswer = () => {
+    if (!suggestedAnswer) return
+    navigator.clipboard.writeText(suggestedAnswer)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
-  const getComponentBadgeClass = (s: ComponentStatus) => {
-    switch (s) {
-      case 'Ready':
-        return 'status-badge status-ready'
-      case 'Unavailable':
-        return 'status-badge status-unavailable'
-      case 'Checking':
-      default:
-        return 'status-badge status-checking'
-    }
+  const renderFormattedTranscript = (text: string) => {
+    const lines = text.split('\n')
+    return lines.map((line, idx) => {
+      const match = line.match(/^(Speaker\s*\d+|User|Assistant|Person\s*[A-Z]?):\s*(.*)$/i)
+      if (match) {
+        const speaker = match[1]
+        const message = match[2]
+        return (
+          <div key={idx} className="transcript-line">
+            <span className="transcript-speaker">{speaker}</span>
+            <span className="transcript-speech">{message}</span>
+          </div>
+        )
+      }
+      return (
+        <div key={idx} className="transcript-line raw">
+          <span className="transcript-speech">{line}</span>
+        </div>
+      )
+    })
   }
 
   return (
     <div className="app-container">
-      {/* Top Header */}
+      {/* Refined Top Header */}
       <header className="app-header">
-        <div className="header-left">
-          <div className="app-icon-badge">AI</div>
-          <div>
-            <h1 className="app-title">Local AI Conversation Assistant</h1>
-            <p className="app-subtitle">Windows Desktop • Phase 3 Ollama LLM Integration</p>
+        <div className="header-brand">
+          <div className="app-mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2v20M17 5v14M7 9v6M22 10v4M2 10v4" />
+            </svg>
+          </div>
+          <div className="brand-text">
+            <h1 className="app-title">Local AI Assistant</h1>
+            <p className="app-subtitle">Private • On-Device Intelligence</p>
           </div>
         </div>
-        <div className="header-right" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {/* Whisper Status */}
-          <div
-            className={getComponentBadgeClass(whisperStatus)}
-            title={whisperInfo?.error || (whisperStatus === 'Ready' ? `Whisper ${whisperInfo?.engine.toUpperCase()} ready` : 'Checking Whisper...')}
-          >
-            <span className="status-dot"></span>
-            <span className="status-label">Whisper: {whisperStatus}</span>
+
+        {/* Quiet Runtime & Session Telemetry Cluster */}
+        <div className="header-meta">
+          <div className="telemetry-bar">
+            {/* Whisper Status Indicator */}
+            <div
+              className={`telemetry-item ${whisperStatus.toLowerCase()}`}
+              title={whisperInfo?.error || (whisperStatus === 'Ready' ? `whisper.cpp ${whisperInfo?.engine.toUpperCase()} ready (${whisperInfo?.modelPath})` : 'Whisper speech-to-text')}
+            >
+              <span className={`status-dot ${whisperStatus.toLowerCase()}`}></span>
+              <span className="telemetry-name">Whisper</span>
+              <span className="telemetry-val">
+                {whisperStatus === 'Ready' ? 'Ready' : whisperStatus}
+              </span>
+            </div>
+
+            <span className="telemetry-divider" aria-hidden="true"></span>
+
+            {/* Ollama Status Indicator */}
+            <div
+              className={`telemetry-item ${ollamaStatus.toLowerCase()}`}
+              title={ollamaInfo?.error || (ollamaStatus === 'Ready' ? `Ollama service active (${ollamaInfo?.model})` : 'Ollama local LLM')}
+            >
+              <span className={`status-dot ${ollamaStatus.toLowerCase()}`}></span>
+              <span className="telemetry-name">Ollama</span>
+              <span className="telemetry-val">
+                {ollamaStatus === 'Ready' ? (ollamaInfo?.model || 'Ready') : ollamaStatus}
+              </span>
+            </div>
           </div>
 
-          {/* Ollama Status */}
-          <div
-            className={getComponentBadgeClass(ollamaStatus)}
-            title={ollamaInfo?.error || (ollamaStatus === 'Ready' ? `Ollama ready (${ollamaInfo?.model})` : 'Checking Ollama...')}
-          >
-            <span className="status-dot"></span>
-            <span className="status-label">Ollama: {ollamaStatus}</span>
-          </div>
-
-          {/* App Execution State Indicator */}
-          <div className={getStatusBadgeClass()}>
-            <span className="status-dot"></span>
-            <span className="status-label">{status}</span>
+          {/* Active Session Status Badge */}
+          <div className={`session-badge ${status.toLowerCase()}`}>
+            <span className="session-dot"></span>
+            <span className="session-label">
+              {status === 'Generating' ? 'Generating' : status === 'Listening' ? 'Recording' : status}
+            </span>
           </div>
         </div>
       </header>
 
-      {/* Control Bar */}
-      <section className="controls-bar" aria-label="Controls">
-        <div className="controls-group">
+      {/* Main Action Bar */}
+      <section className="action-bar" aria-label="Application Actions">
+        <div className="action-group">
+          {/* Start Action */}
           <button
             id="btn-start"
             className="btn btn-primary"
             onClick={handleStart}
             disabled={status === 'Listening' || isGenerating}
-            title="Start listening (demonstrates scaffold state transition)"
+            title="Start listening session (scaffold state)"
           >
-            Start
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+            <span>Start</span>
           </button>
+
+          {/* Stop Action */}
           <button
             id="btn-stop"
-            className="btn btn-secondary"
+            className="btn btn-stop"
             onClick={handleStop}
             disabled={status === 'Idle' || status === 'Stopped' || isGenerating}
-            title="Stop listening"
+            title="Stop listening session"
           >
-            Stop
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="4" y="4" width="16" height="16" rx="2" />
+            </svg>
+            <span>Stop</span>
           </button>
+
+          <span className="actions-separator" aria-hidden="true"></span>
+
+          {/* Suggest Answer Action */}
           <button
             id="btn-suggest"
-            className="btn btn-accent"
+            className="btn btn-suggest"
             onClick={handleSuggestAnswer}
             disabled={isGenerating || ollamaStatus !== 'Ready' || !transcript.trim()}
             title={
               ollamaStatus !== 'Ready'
-                ? 'Ollama is unavailable. Install Ollama and pull qwen2.5:3b to enable.'
+                ? 'Ollama is offline or model is missing.'
                 : !transcript.trim()
-                  ? 'Provide or load a transcript first to suggest an answer.'
-                  : 'Generate streaming answer based on conversation transcript'
+                  ? 'Add or record a conversation transcript first.'
+                  : 'Synthesize suggested answer locally from transcript'
             }
           >
-            {isGenerating ? 'Generating...' : 'Suggest Answer'}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z" />
+            </svg>
+            <span>{isGenerating ? 'Generating...' : 'Suggest Answer'}</span>
           </button>
+
+          {/* Cancel Generation Button */}
           {isGenerating && (
             <button
               id="btn-cancel"
-              className="btn btn-danger"
+              className="btn btn-cancel"
               onClick={handleCancelAnswer}
-              title="Cancel active Ollama generation"
+              title="Cancel active Ollama inference"
             >
-              Cancel Generation
-            </button>
-          )}
-          {suggestedAnswer && !isGenerating && (
-            <button
-              id="btn-clear-answer"
-              className="btn btn-ghost"
-              onClick={handleResetAnswer}
-              title="Clear generated answer"
-            >
-              Clear Answer
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+              <span>Cancel</span>
             </button>
           )}
         </div>
-        <div className="controls-note">
-          <span className="pill-phase">Phase 3</span>
-          <span>Ollama local streaming active • Live microphone capture scheduled for Phase 4</span>
+
+        {/* Context Hint */}
+        <div className="action-hint">
+          {status === 'Listening' ? (
+            <span className="hint-active">Listening active • Speech-to-text pipeline</span>
+          ) : isGenerating ? (
+            <span className="hint-generating">Streaming answer locally via {ollamaInfo?.model || 'qwen2.5:3b'}</span>
+          ) : (
+            <span className="hint-idle">Zero cloud dependencies • 100% offline</span>
+          )}
         </div>
       </section>
 
-      {/* Inline Validation Banner if Error Present */}
+      {/* Dismissible Error / Notice Banner */}
       {validationError && (
-        <div style={{ padding: '8px 24px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderBottom: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>⚠️ {validationError}</span>
-          <button className="btn btn-ghost" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={() => setValidationError(null)}>Dismiss</button>
+        <div className="system-banner error" role="alert">
+          <div className="banner-content">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <span>{validationError}</span>
+          </div>
+          <button className="banner-dismiss" onClick={() => setValidationError(null)} aria-label="Dismiss notice">
+            Dismiss
+          </button>
         </div>
       )}
 
-      {/* Main Panels Grid */}
-      <main className="panels-grid">
-        {/* Live Transcript Panel */}
-        <section className="panel" aria-labelledby="transcript-heading">
+      {/* Main Dual-Panel Workspace */}
+      <main className="workspace-grid">
+        {/* Left Panel: Live Transcript */}
+        <section className="workspace-panel" aria-labelledby="heading-transcript">
           <div className="panel-header">
-            <h2 id="transcript-heading" className="panel-title">
-              Live Transcript
-            </h2>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <span className="panel-tag">
-                {whisperStatus === 'Ready' ? 'whisper.cpp (Ready)' : 'whisper.cpp (Phase 2)'}
+            <div className="panel-header-title">
+              <h2 id="heading-transcript" className="panel-title">Conversation Transcript</h2>
+              <span className="panel-badge">
+                {whisperStatus === 'Ready' ? 'whisper.cpp' : 'whisper'}
               </span>
+            </div>
+            <div className="panel-header-actions">
               {transcript && (
                 <button
-                  className="btn btn-ghost"
-                  style={{ padding: '2px 6px', fontSize: '11px' }}
+                  className="btn-text-ghost"
                   onClick={handleClearTranscript}
-                  title="Clear transcript text"
+                  title="Clear conversation transcript"
                 >
                   Clear
                 </button>
               )}
             </div>
           </div>
+
           <div className="panel-body">
-            {/* Actionable Warning if Whisper is Unavailable */}
+            {/* Whisper Warning Notice if Missing */}
             {whisperStatus === 'Unavailable' && (
-              <div className="whisper-warning-box">
-                <div className="whisper-warning-title">
-                  <span>⚠️</span>
-                  <span>Whisper Runtime Unavailable</span>
+              <div className="notice-box warning">
+                <div className="notice-header">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                  <span>Whisper STT Unavailable</span>
                 </div>
-                <p className="whisper-warning-desc">
+                <p className="notice-text">
                   {whisperInfo?.error || 'Local whisper.cpp executable or model is missing.'}
                 </p>
-                <p className="whisper-warning-desc" style={{ marginTop: '6px' }}>
-                  <strong>Setup:</strong> Place <code>whisper-cli.exe</code> in <code>bin/</code> and <code>ggml-base.en.bin</code> in <code>models/</code>.
-                </p>
+                <div className="notice-code-block">
+                  Place <code>whisper-cli.exe</code> in <code>bin/</code> and <code>ggml-base.en.bin</code> in <code>models/</code>
+                </div>
               </div>
             )}
 
-            {/* Transcript Display or Sample Prompt */}
+            {/* Transcript Content Display */}
             {transcript ? (
-              <div className="transcript-sample-card">
-                <div style={{ fontSize: '11px', fontWeight: 600, color: '#38bdf8', marginBottom: '8px', textTransform: 'uppercase' }}>
-                  Conversation Context
-                </div>
-                <p className="transcript-sample-text">{transcript}</p>
+              <div className="transcript-canvas">
+                {renderFormattedTranscript(transcript)}
               </div>
             ) : status === 'Listening' ? (
-              <div className="scaffold-active-notice">
-                <div className="notice-icon">🎙️</div>
-                <p className="notice-title">Status: Listening (Scaffold State)</p>
-                <p className="notice-desc">
-                  Whisper speech engine is validated. Live microphone capture and chunking stream will be connected in Phase 4.
+              <div className="state-empty listening">
+                <div className="empty-indicator pulse">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="23" />
+                    <line x1="8" y1="23" x2="16" y2="23" />
+                  </svg>
+                </div>
+                <h3 className="empty-title">Recording in Progress</h3>
+                <p className="empty-desc">
+                  Speech recognition foundation is active. Real-time audio streaming from microphone will connect in Phase 4.
                 </p>
-                <div style={{ marginTop: '12px' }}>
-                  <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={handleLoadSampleTranscript}>
-                    Load Sample Meeting Transcript for Testing
+                <div className="empty-action">
+                  <button className="btn-utility" onClick={handleLoadSampleTranscript}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                      <polyline points="10 9 9 9 8 9" />
+                    </svg>
+                    <span>Load sample transcript for testing</span>
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="empty-state">
-                <div className="empty-state-icon">📝</div>
-                <p className="empty-state-text">
-                  Microphone audio stream will feed transcript here in Phase 4.
+              <div className="state-empty">
+                <div className="empty-indicator">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </svg>
+                </div>
+                <h3 className="empty-title">No Conversation Recorded</h3>
+                <p className="empty-desc">
+                  Live meeting conversation will appear here once audio is captured. To test answer generation right now:
                 </p>
-                <p className="empty-state-subtext" style={{ marginBottom: '14px' }}>
-                  To test the Phase 3 Ollama "Suggest Answer" workflow immediately, load a sample conversation transcript below:
-                </p>
-                <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={handleLoadSampleTranscript}>
-                  Load Sample Meeting Transcript
-                </button>
+                <div className="empty-action">
+                  <button className="btn-utility" onClick={handleLoadSampleTranscript}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                    </svg>
+                    <span>Load sample meeting transcript</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
         </section>
 
-        {/* AI Suggested Answer Panel */}
-        <section className="panel" aria-labelledby="answer-heading">
+        {/* Right Panel: AI Suggested Answer */}
+        <section className="workspace-panel" aria-labelledby="heading-answer">
           <div className="panel-header">
-            <h2 id="answer-heading" className="panel-title">
-              AI Suggested Answer
-            </h2>
-            <span className="panel-tag">
-              {ollamaStatus === 'Ready' ? `Ollama (${ollamaInfo?.model})` : 'Ollama LLM (Phase 3)'}
-            </span>
+            <div className="panel-header-title">
+              <h2 id="heading-answer" className="panel-title">AI Suggested Answer</h2>
+              <span className="panel-badge">
+                {ollamaStatus === 'Ready' ? (ollamaInfo?.model || 'qwen2.5:3b') : 'Ollama'}
+              </span>
+            </div>
+            <div className="panel-header-actions">
+              {suggestedAnswer && !isGenerating && (
+                <>
+                  <button
+                    className="btn-text-ghost"
+                    onClick={handleCopyAnswer}
+                    title="Copy generated answer to clipboard"
+                  >
+                    {copied ? (
+                      <span className="text-success-inline">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                        Copied
+                      </span>
+                    ) : (
+                      'Copy'
+                    )}
+                  </button>
+                  <button
+                    className="btn-text-ghost"
+                    onClick={handleResetAnswer}
+                    title="Clear current answer"
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
+            </div>
           </div>
+
           <div className="panel-body">
-            {/* Actionable Warning if Ollama is Unavailable */}
+            {/* Ollama Warning Notice if Missing */}
             {ollamaStatus === 'Unavailable' && (
-              <div className="ollama-warning-box">
-                <div className="ollama-warning-title">
-                  <span>⚠️</span>
-                  <span>Ollama Runtime Unavailable</span>
+              <div className="notice-box warning">
+                <div className="notice-header">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>Ollama Service Unavailable</span>
                 </div>
-                <p className="ollama-warning-desc">
-                  {ollamaInfo?.error || 'Local Ollama service or target model is missing.'}
+                <p className="notice-text">
+                  {ollamaInfo?.error || 'Local Ollama runtime is not running or model is missing.'}
                 </p>
-                <div className="ollama-warning-desc" style={{ marginTop: '8px' }}>
-                  <strong>Manual Setup:</strong>
-                  <ol style={{ paddingLeft: '18px', marginTop: '4px', lineHeight: 1.4 }}>
-                    <li>Ensure Ollama is running (<code>http://127.0.0.1:11434</code>).</li>
-                    <li>Open terminal and run: <code>ollama pull qwen2.5:3b</code></li>
-                  </ol>
+                <div className="notice-code-block">
+                  Run in terminal: <code>ollama pull qwen2.5:3b</code>
                 </div>
               </div>
             )}
 
+            {/* Answer Display */}
             {suggestedAnswer !== null ? (
-              <div className="answer-stream-container">
-                <div className="answer-meta-bar">
-                  <span>
-                    {isGenerating ? (
-                      <span style={{ color: '#c084fc', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span className="status-dot" style={{ backgroundColor: '#a855f7' }}></span>
-                        Streaming from {ollamaInfo?.model || 'qwen2.5:3b'}...
+              <div className="answer-canvas">
+                {/* Meta bar */}
+                <div className="answer-status-bar">
+                  {isGenerating ? (
+                    <div className="answer-status-generating">
+                      <span className="dot-pulse-purple"></span>
+                      <span>Streaming response from {ollamaInfo?.model || 'qwen2.5:3b'}...</span>
+                    </div>
+                  ) : streamMeta?.isCancelled ? (
+                    <div className="answer-status-cancelled">
+                      <span>Generation cancelled by user</span>
+                    </div>
+                  ) : (
+                    <div className="answer-status-complete">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      <span>
+                        Generated in {streamMeta?.durationMs ? `${(streamMeta.durationMs / 1000).toFixed(2)}s` : '0.0s'}
+                        {streamMeta?.model ? ` • ${streamMeta.model}` : ''}
                       </span>
-                    ) : streamMeta?.isCancelled ? (
-                      <span style={{ color: '#fbbf24' }}>Generation Cancelled</span>
-                    ) : (
-                      <span style={{ color: '#34d399' }}>
-                        Completed {streamMeta?.durationMs ? `(${(streamMeta.durationMs / 1000).toFixed(2)}s)` : ''} • Model: {streamMeta?.model || 'qwen2.5:3b'}
-                      </span>
-                    )}
-                  </span>
+                    </div>
+                  )}
+
                   {isGenerating && (
-                    <button className="btn btn-danger" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={handleCancelAnswer}>
+                    <button className="btn-cancel-mini" onClick={handleCancelAnswer}>
                       Cancel
                     </button>
                   )}
                 </div>
-                <div className="answer-stream-text">
+
+                {/* Text Content */}
+                <div className="answer-prose">
                   {suggestedAnswer}
-                  {isGenerating && <span className="streaming-cursor"></span>}
+                  {isGenerating && <span className="stream-caret" aria-hidden="true"></span>}
                 </div>
               </div>
             ) : (
-              <div className="empty-state">
-                <div className="empty-state-icon">💡</div>
-                <p className="empty-state-text">
-                  The locally generated answer will stream here in real time.
-                </p>
-                <p className="empty-state-subtext">
-                  Ensure a transcript is loaded, then click <strong>Suggest Answer</strong> to trigger local Ollama inference.
+              <div className="state-empty">
+                <div className="empty-indicator">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                </div>
+                <h3 className="empty-title">Ready for Questions</h3>
+                <p className="empty-desc">
+                  When a conversation transcript is loaded, click <strong>Suggest Answer</strong> to synthesize talking points and answers with on-device AI.
                 </p>
               </div>
             )}
@@ -481,22 +602,14 @@ export default function App() {
         </section>
       </main>
 
-      {/* App Footer */}
+      {/* Unobtrusive Minimalist Footer */}
       <footer className="app-footer">
-        <div className="footer-item">
-          <span className="footer-label">System:</span>
-          <span>{systemInfo}</span>
+        <div className="footer-left">
+          <span className="footer-pill">Local Engine</span>
+          <span className="footer-text">{systemInfo}</span>
         </div>
-        <div className="footer-item">
-          <span className="footer-label">Whisper:</span>
-          <span>{whisperStatus === 'Ready' ? `Ready (${whisperInfo?.engine.toUpperCase()})` : whisperStatus}</span>
-        </div>
-        <div className="footer-item">
-          <span className="footer-label">Ollama:</span>
-          <span>{ollamaStatus === 'Ready' ? `Ready (${ollamaInfo?.model})` : ollamaStatus}</span>
-        </div>
-        <div className="footer-item">
-          <span>Local-only architecture • Secure sandbox isolation</span>
+        <div className="footer-right">
+          <span>Private • Air-Gapped • Zero Cloud Telemetry</span>
         </div>
       </footer>
     </div>

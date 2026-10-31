@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [UI Polish: Premium Dark Desktop Redesign] - 2026-10-31
+
+### Changed
+- **Design System & Palette (`src/index.css`)**:
+  - Replaced generic saturated navy-blue theme with an understated obsidian/deep charcoal surface hierarchy (`#0b0c0f`, `#101217`, `#13151b`, `#161922`, `#1a1e28`).
+  - Implemented 1px hairline separation system with subtle transparency (`rgba(255,255,255,0.05)` - `0.08`) replacing heavy borders.
+  - Refined typography hierarchy: softer primary text (`#f1f3f7`), muted secondary text (`#9aa2b1`), and structured conversational font metrics (`line-height: 1.65`–`1.7`).
+- **Application Header Redesign (`src/App.tsx`, `src/index.css`)**:
+  - Replaced generic "AI" gradient badge with an elegant geometric soundwave mark.
+  - Consolidated scattered status pills into a quiet, unified Runtime Telemetry Cluster (`Whisper` and `Ollama` dot+status items) paired with an understated session pill.
+- **Controls & Action Hierarchy (`src/App.tsx`)**:
+  - Formed a clear primary-secondary hierarchy: solid blue `Start` recording action, distinctive muted-crimson `Stop` action, and refined dark-slate `Suggest Answer` action.
+  - Moved panel-specific reset actions (`Clear Transcript`, `Copy Answer`, `Clear Answer`) into their respective panel headers as quiet ghost text actions.
+  - Removed decorative developer pills (`Phase 3` note) from the main action bar for a clean, production-grade appearance.
+- **Transcript & Answer Workspace (`src/App.tsx`)**:
+  - Eliminated "card-in-a-card" nesting: transcripts and streaming answers now flow directly on the main panel canvas.
+  - Formatted transcript lines with distinct speaker identification tags (`Speaker 1:`, `Speaker 2:`).
+  - Streamlined empty states with refined monochrome SVG icons and understated guidance typography.
+  - Styled "Load sample transcript" as a clean secondary dashed utility action rather than an oversized button.
+  - Added one-click "Copy Answer" clipboard utility with visual confirmation checkmark.
+- **Responsive Scaling & Motion Support**:
+  - Added responsive media query (`@media (max-width: 760px)`) to gracefully stack workspace panels on narrow displays.
+  - Added `@media (prefers-reduced-motion: reduce)` support and custom slim scrollbars.
+
+---
+
 ## [Phase 3: Ollama Local LLM Integration & Streaming Answers] - 2026-10-31
 
 ### Added
