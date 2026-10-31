@@ -1,7 +1,16 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { BrowserWindow as BrowserWindowType } from 'electron'
 import { whisperService } from './whisperService'
+import { ollamaService } from './ollamaService'
+
+const require = createRequire(import.meta.url)
+const { app, BrowserWindow, ipcMain } = require('electron') as {
+  app: typeof import('electron').app
+  BrowserWindow: typeof BrowserWindowType
+  ipcMain: typeof import('electron').ipcMain
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -18,7 +27,7 @@ export const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 export const MAIN_DIST = path.join(process.env.APP_ROOT, 'dist-electron')
 export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
-let mainWindow: BrowserWindow | null = null
+let mainWindow: BrowserWindowType | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -69,6 +78,51 @@ ipcMain.handle('whisper:validate', async () => {
   return await whisperService.getReadiness()
 })
 
+// Phase 3 Ollama IPC handlers: readiness, streaming generation, and cancellation
+ipcMain.handle('ollama:get-readiness', async () => {
+  return await ollamaService.getReadiness()
+})
+
+ipcMain.handle('ollama:start-generation', async (event, payload: { transcript: string }) => {
+  const sender = event.sender
+  const transcript = payload?.transcript || ''
+
+  try {
+    const result = await ollamaService.generateStreaming(transcript, (chunk) => {
+      if (!sender.isDestroyed()) {
+        sender.send('ollama:stream-chunk', { chunk })
+      }
+    })
+
+    if (result.isCancelled) {
+      if (!sender.isDestroyed()) {
+        sender.send('ollama:stream-cancelled', {})
+      }
+      return { success: false, isCancelled: true }
+    } else {
+      if (!sender.isDestroyed()) {
+        sender.send('ollama:stream-done', {
+          fullText: result.fullText,
+          durationMs: result.durationMs,
+          model: result.model,
+        })
+      }
+      return { success: true, isCancelled: false }
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!sender.isDestroyed()) {
+      sender.send('ollama:stream-error', { error: message })
+    }
+    return { success: false, error: message }
+  }
+})
+
+ipcMain.handle('ollama:cancel-generation', async () => {
+  ollamaService.cancel()
+  return { success: true }
+})
+
 app.whenReady().then(async () => {
   createWindow()
 
@@ -86,16 +140,19 @@ app.whenReady().then(async () => {
   })
 })
 
-// Ensure all child processes are cleaned up on shutdown
+// Ensure all child processes and active requests are cleaned up on shutdown
 app.on('before-quit', () => {
+  ollamaService.dispose()
   whisperService.dispose()
 })
 
 app.on('will-quit', () => {
+  ollamaService.dispose()
   whisperService.dispose()
 })
 
 app.on('window-all-closed', () => {
+  ollamaService.dispose()
   whisperService.dispose()
   if (process.platform !== 'darwin') {
     app.quit()

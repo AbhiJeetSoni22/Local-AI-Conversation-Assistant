@@ -1,6 +1,6 @@
 # Configuration & Conventions Reference
 
-This document catalogs all project configuration conventions, environment variables, build settings, and audio parameter rules used throughout the **Local AI Conversation Assistant**.
+This document catalogs all project configuration conventions, environment variables, build settings, and parameter rules used throughout the **Local AI Conversation Assistant**.
 
 ---
 
@@ -26,6 +26,7 @@ The application relies on predictable, project-level relative path resolution. T
 
 The application can be configured at runtime via standard Windows environment variables. All variables are optional and provide sensible defaults:
 
+### Whisper Configuration (Phase 2)
 | Variable | Type | Default | Description |
 | :--- | :---: | :---: | :--- |
 | **`WHISPER_BIN_PATH`** *(or `WHISPER_PATH`)* | String | `./bin/whisper-cli.exe` | Absolute or relative path to the Whisper executable. |
@@ -33,18 +34,29 @@ The application can be configured at runtime via standard Windows environment va
 | **`WHISPER_ENGINE`** | String | `cli` | Whisper engine mode: `'cli'` for atomic CLI invocation, or `'server'` for HTTP daemon mode. |
 | **`WHISPER_HOST`** | String | `127.0.0.1` | Host interface for `whisper-server.exe`. |
 | **`WHISPER_PORT`** | Number | `8080` | Port for `whisper-server.exe`. |
+
+### Ollama Configuration (Phase 3)
+| Variable | Type | Default | Description |
+| :--- | :---: | :---: | :--- |
+| **`OLLAMA_HOST`** *(or `OLLAMA_BASE_URL`)* | String | `http://127.0.0.1:11434` | Base URL of the local Ollama daemon service. |
+| **`OLLAMA_MODEL`** | String | `qwen2.5:3b` | Target local LLM identifier. |
+| **`OLLAMA_TIMEOUT_MS`** | Number | `60000` | Safety timeout in milliseconds for streaming inference requests. |
+
+### System & Build Variables
+| Variable | Type | Default | Description |
+| :--- | :---: | :---: | :--- |
 | **`TEST_LAUNCH`** | String | *(unset)* | Set to `"1"` to trigger automated desktop window launch, verification, and clean shutdown after 1500 ms. |
 | **`APP_ROOT`** | String | `process.cwd()` | Explicit project root directory override for bundled desktop distributions. |
 | **`VITE_DEV_SERVER_URL`** | String | *(auto)* | Injected automatically by Vite during `npm run dev` to point Electron to the local development server. |
 
 ### Setting Environment Variables in Windows PowerShell:
 ```powershell
-# Point to a custom model located elsewhere on disk:
-$env:WHISPER_MODEL_PATH = "D:\AI_Models\ggml-base.en.bin"
+# Custom model or Ollama host override:
+$env:OLLAMA_HOST = "http://127.0.0.1:11434"
+$env:OLLAMA_MODEL = "qwen2.5:3b"
 
-# Switch engine to server mode:
-$env:WHISPER_ENGINE = "server"
-$env:WHISPER_PORT = "8089"
+# Whisper overrides:
+$env:WHISPER_MODEL_PATH = "D:\AI_Models\ggml-base.en.bin"
 
 # Launch application with overrides:
 npm run dev
@@ -69,7 +81,20 @@ To ensure stability and protect whisper.cpp from corrupted or malicious inputs, 
 
 ---
 
-## 4. Build & Tooling Configurations
+## 4. Prompt Builder Rules & Parameters (`electron/promptBuilder.ts`)
+
+The prompt builder sanitizes untrusted conversation transcripts before passing them to the local Ollama LLM:
+
+| Parameter | Value | Description |
+| :--- | :---: | :--- |
+| **Maximum Transcript Length** | 12,000 chars | If transcript exceeds this limit, older conversation is trimmed while preserving the most recent context and appending a truncation notice. |
+| **Context Fencing** | `--- BEGIN TRANSCRIPT ---` / `--- END TRANSCRIPT ---` | Explicit demarcation boundaries prevent prompt injection and model confusion. |
+| **Default Temperature** | `0.7` | Balances concise response generation with conversational fluidity. |
+| **Anti-Hallucination Framing** | Strict System Prompt | Model is instructed to base answers exclusively on the transcript, acknowledge incomplete context politely, and avoid fabricated credentials. |
+
+---
+
+## 5. Build & Tooling Configurations
 
 ### A. TypeScript (`tsconfig.json`)
 Configured in strict mode to ensure zero type coercion or unintended `any` types:
@@ -94,7 +119,8 @@ Configured with `vite-plugin-electron/simple` for seamless HMR across both React
   "build": "tsc && vite build",
   "preview": "vite preview",
   "validate:whisper": "tsx scripts/validate-whisper.ts",
-  "test:whisper": "tsx scripts/test-whisper-failures.ts"
+  "test:whisper": "tsx scripts/test-whisper-failures.ts",
+  "validate:ollama": "tsx scripts/validate-ollama.ts",
+  "test:ollama": "tsx scripts/test-ollama.ts"
 }
 ```
-

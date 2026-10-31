@@ -1,7 +1,7 @@
 # Project Roadmap: Local AI Conversation Assistant
 
 **Repository:** `AbhiJeetSoni22/Local-AI-Conversation-Assistant`  
-**Current Milestone:** Phase 2 Complete  
+**Current Milestone:** Phase 3 Complete  
 **Final Submission Deadline:** November 4, 2026  
 **Status Key:**  
 - `Verified`: Code implemented, built, and validated against automated tests and criteria.  
@@ -15,15 +15,15 @@
 ```mermaid
 flowchart TD
     P1["Phase 1: Desktop Scaffold<br/>[Status: Verified]"] --> P2["Phase 2: Whisper.cpp STT Foundation<br/>[Status: Verified]"]
-    P2 --> P3["Phase 3: Ollama Local LLM Integration<br/>[Status: Not Started]"]
+    P2 --> P3["Phase 3: Ollama Local LLM Integration<br/>[Status: Verified]"]
     P3 --> P4["Phase 4: Microphone Capture & AudioWorklet<br/>[Status: Not Started]"]
     P4 --> P5["Phase 5: End-to-End Pipeline & State Machine<br/>[Status: Not Started]"]
     P5 --> P6["Phase 6: Hardening, Reliability & Submission<br/>[Status: Not Started]"]
 
     classDef done fill:#064e3b,stroke:#059669,color:#ecfdf5;
     classDef pending fill:#1e293b,stroke:#475569,color:#94a3b8;
-    class P1,P2 done;
-    class P3,P4,P5,P6 pending;
+    class P1,P2,P3 done;
+    class P4,P5,P6 pending;
 ```
 
 ---
@@ -55,7 +55,6 @@ flowchart TD
   npm run build
   npm run dev
   ```
-- **Prerequisite for Next Phase:** Electron window launches reliably and builds with 0 TypeScript errors.
 
 ---
 
@@ -93,40 +92,46 @@ flowchart TD
   npm run validate:whisper
   npm run test:whisper
   ```
-- **Prerequisite for Next Phase:** Offline transcription verified with exit code 0; 100% test pass rate.
 
 ---
 
 ## Phase 3 — Ollama Local LLM & Streaming Answer Generation
 
-- **Status:** `Not Started`
+- **Status:** `Verified`
 - **Goal:** Connect the desktop application to a local Ollama instance for fast, streaming AI conversational suggestions.
 - **Scope:**
-  - Define Ollama client configuration (default URL `http://127.0.0.1:11434`, model `qwen2.5:1.5b` or `qwen2.5:3b`).
-  - Implement main process Ollama service with health check (`/api/tags` or `/api/version`).
-  - Implement streaming response generation via Ollama's `/api/generate` or `/api/chat` endpoint.
-  - Stream tokens from main process to renderer via typed IPC events (`ollama:token`, `ollama:done`, `ollama:error`).
+  - Define Ollama client configuration (default URL `http://127.0.0.1:11434`, model `qwen2.5:3b`).
+  - Implement main process Ollama service with health check (`/api/version` and `/api/tags`).
+  - Implement streaming response generation via Ollama's `POST /api/chat` with `{ stream: true }`.
+  - Stream tokens from main process to renderer via typed IPC events (`ollama:stream-chunk`, `ollama:stream-done`, `ollama:stream-error`, `ollama:stream-cancelled`).
+  - Enforce anti-hallucination framing and input length bounds (`electron/promptBuilder.ts`).
+  - Support user-triggered cancellation via `AbortController`.
+  - Enforce concurrency protection against simultaneous inference calls.
   - Build standalone Ollama validation script (`scripts/validate-ollama.ts`).
-  - Update "AI Suggested Answer" panel to display progressive streaming text with smooth rendering.
-  - Add clear error handling when Ollama daemon is offline or model is not pulled.
-- **Dependencies:** Local `Ollama` installed on Windows; `qwen2.5:1.5b` or `qwen2.5:3b` pulled locally.
-- **Expected Files:**
+  - Build deterministic 36-point test suite (`scripts/test-ollama.ts`) with mock HTTP server.
+  - Update "AI Suggested Answer" panel to display progressive streaming text, pulsing cursor, and duration metadata.
+  - Add actionable UI warning card when Ollama daemon is offline or model is missing.
+- **Dependencies:** Local `Ollama` installed on Windows; `qwen2.5:3b` pulled locally.
+- **Primary Files:**
   - `electron/ollamaConfig.ts`
+  - `electron/promptBuilder.ts`
   - `electron/ollamaService.ts`
-  - `scripts/validate-ollama.ts`
-  - `scripts/test-ollama-failures.ts`
-  - Updates to `electron/main.ts`, `electron/preload.ts`, `src/App.tsx`, `src/types/electron.d.ts`
+  - `electron/main.ts`, `electron/preload.ts`
+  - `src/App.tsx`, `src/types/electron.d.ts`, `src/index.css`
+  - `scripts/validate-ollama.ts`, `scripts/test-ollama.ts`
 - **Acceptance Criteria:**
-  - Health check correctly detects whether Ollama is running.
+  - Health check detects whether Ollama is reachable and model is available.
   - Suggest Answer button triggers streaming answer from Ollama using transcript context.
   - Renderer renders tokens progressively without freezing the UI.
-  - UI displays actionable error message if Ollama is not running (`"Ollama is offline. Run 'ollama serve'"`).
+  - All 36 automated unit & integration tests pass with 0 failures.
+  - UI displays actionable error message with exact setup steps if Ollama is not ready.
 - **Validation Commands:**
   ```bash
-  npm run validate:ollama
+  npx tsc --noEmit
+  npm run build
   npm run test:ollama
+  npm run validate:ollama
   ```
-- **Prerequisite for Next Phase:** Ollama streaming verified with mock transcript input.
 
 ---
 
@@ -136,9 +141,9 @@ flowchart TD
 - **Goal:** Capture live microphone input in the renderer, resample to 16 kHz 16-bit PCM, and stream audio chunks to main process.
 - **Scope:**
   - Request browser microphone permissions cleanly via `navigator.mediaDevices.getUserMedia`.
-  - Implement `AudioWorklet` or Web Audio script processor to capture raw audio samples.
+  - Implement `AudioWorklet` to capture raw audio samples on the audio thread.
   - Downsample incoming audio (e.g. 44.1/48 kHz) to 16,000 Hz single-channel mono PCM.
-  - Implement audio chunker (e.g., 3-to-5 second sliding audio windows or Voice Activity Detection / VAD).
+  - Implement audio chunker (3-to-5 second sliding audio windows or Voice Activity Detection).
   - Send audio chunk buffers across typed IPC to Electron main.
   - Electron main receives chunks, validates format with `wavValidator`, and feeds to `whisperService`.
   - Handle audio device disconnection, microphone denial, and background tab suspension.
@@ -153,12 +158,6 @@ flowchart TD
   - Microphone audio is converted to valid 16 kHz 16-bit PCM buffers.
   - Chunks stream into Whisper service without UI lag or memory leaks.
   - Clicking "Stop" halts capture, flushes pending buffer, and transitions to `Stopped`.
-- **Validation Commands:**
-  ```bash
-  npm run dev
-  # Manual microphone test and chunk inspection
-  ```
-- **Prerequisite for Next Phase:** Live voice input produces transcribed text in terminal/console without crashes.
 
 ---
 
@@ -178,31 +177,11 @@ flowchart TD
   - `src/context/ConversationContext.tsx`
   - `src/hooks/useConversation.ts`
   - Updates to `src/App.tsx`, `electron/main.ts`
-- **Acceptance Criteria:**
-  - User speaks into microphone ➔ text appears in Live Transcript panel in near real-time.
-  - User clicks "Suggest Answer" ➔ context-aware suggestion streams into the right panel.
-  - Controls correctly enforce states (cannot suggest answer when transcript is empty; cannot start when already listening).
-  - Rapid start/stop cycling does not corrupt state or leave orphan processes.
-- **Prerequisite for Next Phase:** Full end-to-end user loop functioning without manual intervention.
 
 ---
 
-## Phase 6 — Hardening, Reliability, Documentation & Submission
+## Phase 6 — Hardening, Air-Gapped Verification & Final Submission
 
 - **Status:** `Not Started`
-- **Goal:** Perform full edge-case hardening, offline verification, documentation audit, and prepare submission materials for November 4, 2026 deadline.
-- **Scope:**
-  - Conduct full battery of offline tests (disconnect network, run full conversation loop).
-  - Test recovery from daemon crashes (kill Ollama or Whisper mid-session; verify app recovers gracefully).
-  - Profile memory and CPU usage over a 15-minute continuous session to guarantee no memory leaks.
-  - Freeze documentation, review setup instructions on a clean VM/machine.
-  - Prepare demonstration video/script and submission archive.
-- **Expected Files:**
-  - Finalized `README.md` and `docs/*`
-  - Submission release bundle / report
-- **Acceptance Criteria:**
-  - 100% offline operation verified.
-  - Zero unhandled promise rejections or runtime crashes under error conditions.
-  - Full project documentation matches implementation exactly.
-  - Project ready for formal evaluation.
-
+- **Goal:** Verify reliability on a clean Windows machine, package for distribution, and assemble submission artifacts.
+- **Target Deadline:** November 4, 2026.

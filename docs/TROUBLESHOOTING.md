@@ -51,11 +51,54 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
-## 2. Audio & WAV Validation Errors
+## 2. Ollama Local LLM Issues (Phase 3)
 
-### Issue 2.1: `Invalid WAV header: expected "RIFF", found ...`
+### Issue 2.1: UI displays `Ollama: Unavailable` (Service Unreachable)
+- **Symptom:** Header badge shows `Ollama: Unavailable`, and "Suggest Answer" is disabled.
+- **Root Cause:** The Ollama background service is not running on `http://127.0.0.1:11434`.
+- **Diagnostic Step:**
+  ```powershell
+  npm run validate:ollama
+  ```
+- **Solution:**
+  1. Ensure Ollama is installed from [https://ollama.com](https://ollama.com).
+  2. Launch Ollama from the Windows Start menu or check the system tray icon.
+  3. Confirm the endpoint responds:
+     ```powershell
+     curl http://127.0.0.1:11434/api/version
+     ```
+  4. If Ollama runs on a non-standard port or machine:
+     ```powershell
+     $env:OLLAMA_HOST = "http://127.0.0.1:11434"
+     ```
+
+---
+
+### Issue 2.2: Error: `Model "qwen2.5:3b" is not installed in Ollama`
+- **Symptom:** Ollama is reachable, but `Ollama: Unavailable` displays: `Model "qwen2.5:3b" is not installed in Ollama. Run: ollama pull qwen2.5:3b`.
+- **Root Cause:** The Ollama daemon is active, but the target model has not been downloaded yet.
+- **Solution:**
+  Open PowerShell or Command Prompt and run:
+  ```powershell
+  ollama pull qwen2.5:3b
+  ```
+  Once download completes, verify with `ollama list` and refresh the app or run `npm run validate:ollama`.
+
+---
+
+### Issue 2.3: `A generation request is already in progress`
+- **Symptom:** The user clicks "Suggest Answer" twice quickly and receives this validation error.
+- **Root Cause:** `OllamaService` enforces strict single-request concurrency to prevent multiple overlapping LLM inferences on the CPU.
+- **Solution:**
+  Wait for the current response to finish streaming, or click the **Cancel Generation** button.
+
+---
+
+## 3. Audio & WAV Validation Errors
+
+### Issue 3.1: `Invalid WAV header: expected "RIFF", found ...`
 - **Symptom:** `transcribe()` or `validateWavBuffer()` rejects audio with header error.
-- **Root Cause:** The provided audio file is not an uncompressed RIFF/WAVE file (e.g., it is an MP3, AAC, FLAC, or raw headerless PCM stream).
+- **Root Cause:** The provided audio file is not an uncompressed RIFF/WAVE file (e.g., MP3, AAC, FLAC).
 - **Solution:**
   Ensure the audio file is converted to standard WAV format. Using `ffmpeg`:
   ```powershell
@@ -64,58 +107,26 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
-### Issue 2.2: `Unsupported audio encoding: format code 3 (expected 1)`
+### Issue 3.2: `Unsupported audio encoding: format code 3 (expected 1)`
 - **Symptom:** The validator rejects the audio with format code 3.
 - **Root Cause:** Format code `3` indicates 32-bit IEEE floating-point PCM. `whisper.cpp` requires 16-bit signed integer linear PCM (format code `1`).
 - **Solution:**
-  Ensure recording or export tools output 16-bit integer PCM (`pcm_s16le`).
+  Ensure recording tools output 16-bit integer PCM (`pcm_s16le`).
 
 ---
 
-### Issue 2.3: `WAV audio duration (X s) exceeds maximum allowed limit (120s)`
-- **Symptom:** Long audio files are rejected before transcription.
-- **Root Cause:** By default, `validateWavBuffer` enforces a 120-second safety limit to protect against memory spikes during real-time streaming chunks.
+## 4. Electron & Development Environment Issues
+
+### Issue 4.1: `ELECTRON_RUN_AS_NODE` Environment Conflict
+- **Symptom:** Running `electron .` or smoke launch produces:
+  `TypeError: Cannot read properties of undefined (reading 'handle')` or runs as pure Node.
+- **Root Cause:** When running from certain terminals or IDEs, the parent process injects `ELECTRON_RUN_AS_NODE=1`.
 - **Solution:**
-  For standalone testing of longer files, pass custom validator options:
-  ```typescript
-  validateWavFile(filePath, { maxDurationSec: 600 })
+  Unset the variable in PowerShell before launching:
+  ```powershell
+  Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  & 'node_modules\.bin\electron.cmd' '.'
   ```
-
----
-
-## 3. Server Mode & Port Conflicts
-
-### Issue 3.1: `Port 8080 is already in use on 127.0.0.1`
-- **Symptom:** `whisperService.startServer()` rejects startup immediately.
-- **Root Cause:** Another application (e.g. an existing web server or previous zombie `whisper-server.exe`) is already bound to port 8080.
-- **Solution:**
-  1. Check for processes occupying the port:
-     ```powershell
-     netstat -ano | findstr :8080
-     ```
-  2. Or configure Whisper to use a different port:
-     ```powershell
-     $env:WHISPER_PORT="8089"
-     ```
-  3. Or switch to CLI engine mode (default, requires no ports):
-     ```powershell
-     $env:WHISPER_ENGINE="cli"
-     ```
-
----
-
-## 4. Electron & Development Build Issues
-
-### Issue 4.1: `TypeError: Cannot read properties of undefined (reading 'exports') at cjsPreparseModuleExports`
-- **Symptom:** Running `npm run dev` or `npx electron .` crashes on startup during Node ESM module evaluation.
-- **Root Cause:** In Node.js / Electron, when `package.json` specifies `"type": "module"`, importing CommonJS modules via named imports (or running `--require` hooks against ESM files) can trigger Node's CJS lexer bug.
-- **Solution:**
-  Ensure Electron imports in `electron/main.ts` use the default package import:
-  ```typescript
-  import electron from 'electron'
-  const { app, BrowserWindow, ipcMain } = electron
-  ```
-  And ensure `preload.ts` is bundled as an ES module or clean script without mixing `module.exports` and `import`.
 
 ---
 
@@ -141,4 +152,3 @@ Get-Process -Name "whisper-cli", "whisper-server" -ErrorAction SilentlyContinue
 # Terminate if any are lingering
 Stop-Process -Name "whisper-cli", "whisper-server" -Force -ErrorAction SilentlyContinue
 ```
-

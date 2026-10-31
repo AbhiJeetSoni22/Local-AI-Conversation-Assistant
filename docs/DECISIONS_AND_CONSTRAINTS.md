@@ -44,11 +44,12 @@ This document records the architectural decisions, trade-offs, permanent enginee
 ---
 
 ### Decision 1.5: Ollama for Local LLM Reasoning (Phase 3)
-- **Decision:** Standardize on a local `Ollama` daemon serving `qwen2.5:1.5b` or `qwen2.5:3b`.
+- **Decision:** Standardize on a local `Ollama` daemon serving `qwen2.5:3b`.
 - **Rationale:**
   - *Standardized HTTP API:* Ollama provides a clean, well-tested REST API on localhost (`http://127.0.0.1:11434`) with native streaming JSON support.
   - *Separation of Concerns:* Isolates LLM memory and GPU/CPU resource management from the Electron main process.
-  - *Qwen 2.5 Architecture:* Qwen 2.5 1.5B/3B offers state-of-the-art conversational summarization and reasoning in sub-3GB quantized memory footprints.
+  - *Qwen 2.5 Architecture:* Qwen 2.5 3B offers state-of-the-art conversational summarization, actionable meeting recommendations, and instruction following in a compact ~1.9 GB footprint.
+  - *Safety & Anti-Hallucination:* The prompt builder enforces strict grounding in the transcript and acknowledgement of incomplete context.
 
 ---
 
@@ -93,6 +94,6 @@ The following architectural topics require explicit decision during Phase 3 and 
 | Topic | Options | Trade-Offs | Current Status |
 | :--- | :--- | :--- | :---: |
 | **Whisper Mode for Live Audio** | **Option A:** `whisper-cli` on 3s WAV chunks<br/>**Option B:** `whisper-server` HTTP daemon | Option A is atomic and uses no idle memory, but has ~600ms model-load latency per chunk. Option B is faster per chunk but holds 150MB RAM continuously. | `Needs Confirmation` in Phase 4 |
-| **Qwen Model Size** | **Option A:** `qwen2.5:1.5b`<br/>**Option B:** `qwen2.5:3b` | 1.5B responds in < 1.5s on CPU; 3B provides slightly better nuance but takes 3–5s on CPU without GPU acceleration. | `Needs Confirmation` in Phase 3 |
+| **Qwen Model Size** | **Option A:** `qwen2.5:1.5b`<br/>**Option B:** `qwen2.5:3b` | Standardized on `qwen2.5:3b` as planned; 1.5B remains supported via `OLLAMA_MODEL` environment variable. | ✅ `Resolved (qwen2.5:3b)` |
 | **Audio Chunk Overlap Strategy** | **Option A:** Fixed sliding window with text deduplication<br/>**Option B:** Energy-based Voice Activity Detection (VAD) split | Sliding windows are simple but duplicate boundary words; VAD requires careful threshold calibration in noisy rooms. | `Needs Confirmation` in Phase 4 |
 

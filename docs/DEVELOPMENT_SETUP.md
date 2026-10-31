@@ -8,10 +8,10 @@ This guide provides step-by-step instructions for setting up, configuring, and v
 
 - **Operating System:** Windows 10 or Windows 11 (64-bit x64 architecture).
 - **Processor:** Modern x64 CPU supporting AVX2 / AVX instruction sets (e.g., Intel 4th Gen Core or AMD Zen and newer).
-- **Node.js:** v20.x or v22.x LTS (Verified in development on `v22.23.2`).
+- **Node.js:** v20.x or v22.x LTS (Verified in development on `v20.18.3` and `v22.23.2`).
 - **npm:** v10.x or newer (bundled with Node.js).
 - **Git:** Git for Windows (v2.40+).
-- **Disk Space:** Minimum 1 GB free space (accommodates node_modules, binaries, and GGML models).
+- **Disk Space:** Minimum 4 GB free space (accommodates node_modules, whisper binaries, GGML base model ~148MB, and Ollama Qwen2.5:3b model ~1.9GB).
 
 ---
 
@@ -77,48 +77,86 @@ To run the automated standalone transcription verification:
 
 ---
 
-## 4. Verification Commands
+## 4. Manual Ollama Local LLM Setup (Phase 3 Requirement)
 
-Before launching the Electron desktop application, verify that your local environment is correctly configured:
+In Phase 3, the assistant runs inference locally using **Ollama** and the **`qwen2.5:3b`** model. To ensure complete user transparency, the application never automatically installs software or downloads models behind your back.
+
+Follow these verified manual steps:
+
+### Step 4.1: Install Ollama for Windows
+1. Download the official Windows installer from: [https://ollama.com/download/OllamaSetup.exe](https://ollama.com/download/OllamaSetup.exe)
+2. Run `OllamaSetup.exe` and complete installation.
+3. Ollama will start automatically in your Windows system tray, listening on `http://127.0.0.1:11434`.
+
+### Step 4.2: Verify Ollama CLI
+Open PowerShell or Command Prompt and verify:
+```powershell
+ollama --version
+```
+*Expected output: `ollama version is 0.5.x` or newer.*
+
+### Step 4.3: Pull the Target LLM Model
+Download the planned `qwen2.5:3b` model (~1.9 GB):
+```powershell
+ollama pull qwen2.5:3b
+```
+
+### Step 4.4: Confirm Model Installation
+Verify that `qwen2.5:3b` appears in your installed models list:
+```powershell
+ollama list
+```
+*Expected output includes: `qwen2.5:3b:latest`.*
+
+### Step 4.5: Run Quick Manual CLI Inference Test
+Verify that the model runs cleanly:
+```powershell
+ollama run qwen2.5:3b "Respond with: Local AI Assistant is ready."
+```
+*Type `/bye` to exit the interactive session.*
+
+### Step 4.6: Verify Daemon Reachability
+Ensure the Ollama HTTP API is responding locally:
+```powershell
+curl http://127.0.0.1:11434/api/version
+```
+*Expected JSON output:* `{"version":"0.x.x"}`
+
+---
+
+## 5. Verification Commands
+
+Run the full verification suite before starting the desktop application:
 
 ### 1. Run Strict TypeScript Compilation Check
 Ensures all types, modules, and interfaces compile cleanly with zero errors:
 ```powershell
 npx tsc --noEmit
 ```
-*Expected result:* Exits cleanly with no output.
 
-### 2. Run Standalone Whisper Transcription
-Runs an end-to-end local transcription test on `samples/jfk.wav` directly via `whisper-cli.exe`:
+### 2. Run Whisper Verification Suite (Phase 2)
 ```powershell
+# Standalone local Whisper transcription test on samples/jfk.wav
 npm run validate:whisper
-```
-*Expected result:*
-```text
-=====================================================
-   Whisper.cpp Local Transcription Validation
-=====================================================
-...
-[Step 3/4] Running local Whisper transcription...
-   ✅ Transcription completed successfully!
 
-Recognized Text: "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
-Duration:        ~3600 ms
-Engine:          cli
-Model:           ggml-base.en.bin
-🎉 Standalone Whisper validation succeeded! Foundation verified.
-```
-
-### 3. Run Failure Modes & Edge-Cases Test Suite
-Runs the 18 automated unit and edge-case tests:
-```powershell
+# Comprehensive 18-assertion failure modes & edge-cases test suite
 npm run test:whisper
 ```
 *Expected result:* `Results: 18 / 18 passed (0 failed)`.
 
+### 3. Run Ollama Verification Suite (Phase 3)
+```powershell
+# Deterministic 36-assertion unit & mock integration test suite
+npm run test:ollama
+
+# Standalone live Ollama runtime and streaming inference probe
+npm run validate:ollama
+```
+*Expected result:* `Test Results: 36/36 passed (0 failed)`.
+
 ---
 
-## 5. Running the Application
+## 6. Running the Application
 
 ### Development Mode (with Hot Module Replacement):
 Starts the Vite dev server and spawns the Electron desktop window:
@@ -135,10 +173,8 @@ npx electron .
 
 ---
 
-## 6. What Setup Steps Belong to Later Phases?
+## 7. What Setup Steps Belong to Later Phases?
 
-To keep development focused, do **NOT** perform the following setup tasks yet:
-- **Ollama Installation:** Scheduled for **Phase 3**. You do not need to install Ollama or pull LLM models during Phase 2.
-- **Audio Capture Permissions / Virtual Audio Cables:** Scheduled for **Phase 4**.
+To maintain clear project discipline, do **NOT** implement the following yet:
+- **Audio Capture Permissions / Virtual Audio Cables / AudioWorklet:** Scheduled for **Phase 4**.
 - **Packaging / Installer Setup:** Scheduled for **Phase 6**.
-

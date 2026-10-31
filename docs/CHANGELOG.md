@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Phase 3: Ollama Local LLM Integration & Streaming Answers] - 2026-10-31
+
+### Added
+- **Ollama Configuration & Health Probing (`electron/ollamaConfig.ts`)**:
+  - Implemented configurable host resolution (default `http://127.0.0.1:11434`, overridable via `OLLAMA_HOST` / `OLLAMA_BASE_URL`).
+  - Implemented target model configuration (default `qwen2.5:3b`, overridable via `OLLAMA_MODEL`).
+  - Added non-destructive two-step health check probing `/api/version` (3000ms timeout) and `/api/tags` (4000ms timeout) for exact or variant model matching (`qwen2.5:3b`).
+- **Prompt Builder & Context Guard (`electron/promptBuilder.ts`)**:
+  - Built pure function `buildAnswerPrompt(transcript)` with explicit anti-hallucination system prompt.
+  - Added empty and whitespace-only transcript rejection.
+  - Added 12,000 character length bounding, truncating earlier conversation while retaining recent conversation with context note.
+  - Demarcated untrusted transcript within `--- BEGIN TRANSCRIPT ---` and `--- END TRANSCRIPT ---` boundaries.
+- **Main Process Ollama Streaming Service (`electron/ollamaService.ts`)**:
+  - Built `OllamaService` managing HTTP streaming to `POST /api/chat` with `{ stream: true }`.
+  - Implemented streaming NDJSON parser reading chunks progressively and emitting tokens via `onChunk` callback.
+  - Added concurrency guard locking generation immediately to reject simultaneous overlapping requests.
+  - Added cancellation support using `AbortController` to terminate active HTTP streams mid-flight.
+  - Added safety timeout (`timeoutMs`, default 60s) to abort hanging requests.
+  - Registered shutdown cleanup hooks (`before-quit`, `will-quit`, `exit`, `SIGINT`, `SIGTERM`).
+- **IPC Handlers & Preload Bridge (`electron/main.ts`, `electron/preload.ts`)**:
+  - Added IPC channels: `ollama:get-readiness`, `ollama:start-generation`, `ollama:cancel-generation`.
+  - Added streaming WebContents events: `ollama:stream-chunk`, `ollama:stream-done`, `ollama:stream-error`, `ollama:stream-cancelled`.
+  - Exposed typed contextBridge methods and cleanup unsubscribe listeners in `electron/preload.ts`.
+- **UI Streaming Answer & Cancellation (`src/App.tsx`, `src/index.css`)**:
+  - Added header badge for Ollama status (`Checking`, `Ready`, `Unavailable`).
+  - Added actionable warning card in "AI Suggested Answer" panel guiding users on installing Ollama and running `ollama pull qwen2.5:3b`.
+  - Added live streaming response container with purple status badge, elapsed duration metadata, and animated pulsing cursor.
+  - Added "Cancel Generation" button allowing users to cancel long inferences.
+  - Added "Load Sample Meeting Transcript" utility in Live Transcript panel enabling immediate testing before Phase 4 microphone capture.
+- **Deterministic Automated Test Suite (`scripts/test-ollama.ts`)**:
+  - Built 36-point test suite using in-memory HTTP mock server testing config resolution, prompt bounding, mock health probing, streaming token accumulation, cancellation, concurrency locking, and malformed chunk errors.
+  - Added `npm run test:ollama` script in `package.json`.
+- **Standalone Live Ollama Probe (`scripts/validate-ollama.ts`)**:
+  - Added CLI probe testing live daemon reachability, model existence, and running sample streaming inference to stdout.
+  - Added `npm run validate:ollama` script in `package.json`.
+
+---
+
 ## [Phase 2: Whisper.cpp Local Speech-to-Text Foundation] - 2026-10-31
 
 ### Added
@@ -63,4 +101,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Enforced valid button transition states (`Start` disabled when listening, `Stop` disabled when idle).
 - **Verification Scripts**:
   - Added `TEST_LAUNCH=1` headless verification hook in `electron/main.ts`.
-

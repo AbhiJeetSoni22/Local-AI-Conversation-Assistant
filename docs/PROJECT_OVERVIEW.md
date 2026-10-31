@@ -4,7 +4,7 @@
 **Target Platform:** Windows 10 / 11 (64-bit x64)  
 **Project Type:** Internship Prototype / Local-First Desktop Application  
 **Target Completion Date:** November 4, 2026  
-**Current Phase:** Phase 2 Complete (Whisper.cpp Foundation Verified)  
+**Current Phase:** Phase 3 Complete (Ollama Local LLM Integration Verified)  
 **Last Updated:** October 31, 2026  
 
 ---
@@ -15,7 +15,7 @@ The **Local AI Conversation Assistant** is a Windows desktop application designe
 
 Unlike conventional AI assistants that stream raw audio to external cloud providers (such as OpenAI, Google, or Anthropic), this project operates on a **100% local-first and air-gapped architecture**:
 - **Speech-to-Text (STT):** Processed entirely on the user's CPU/GPU via `whisper.cpp`.
-- **Large Language Model (LLM):** Inferred locally via `Ollama` running lightweight open-weight models (e.g., `qwen2.5:1.5b` or `qwen2.5:3b`).
+- **Large Language Model (LLM):** Inferred locally via `Ollama` running quantized open-weight models (`qwen2.5:3b`).
 - **Data Privacy & Security:** Zero audio buffers, transcripts, or prompts ever leave the local machine. No API keys, cloud subscriptions, or external network connections are required.
 
 ---
@@ -28,14 +28,14 @@ When fully completed across all 6 phases, the user experience follows this linea
 1. Launch Desktop App
    └─ System checks local Whisper and Ollama runtime readiness.
 2. User Clicks "Start"
-   └─ Microphone captures system/speech audio in real-time.
+   └─ Microphone captures system/speech audio in real-time (Phase 4).
 3. Live Audio Chunking & Transcription
    └─ Audio is buffered into clean chunks and transcribed locally by whisper.cpp.
    └─ Transcribed text streams live into the "Live Transcript" panel.
 4. User Clicks "Stop"
    └─ Audio stream stops; any remaining buffer is flushed and transcribed.
 5. User Clicks "Suggest Answer"
-   └─ Context from the latest transcript is formatted and sent to local Ollama.
+   └─ Context from the latest transcript is formatted and sent to local Ollama (Phase 3).
    └─ Ollama streams actionable answers, summaries, or talking points into the "AI Suggested Answer" panel.
 ```
 
@@ -48,9 +48,9 @@ When fully completed across all 6 phases, the user experience follows this linea
 | **Desktop Shell** | Electron 33 | OS integration, window management, Node.js background services, child process execution, strict sandbox isolation. |
 | **Frontend UI** | React 18 | Reactive user interface, button state transitions, real-time transcript display, streaming answer display. |
 | **Build & Tooling** | Vite 6 + TypeScript 5.7 | Rapid HMR development, strict static type enforcement (`tsc --noEmit`), multi-target production bundling. |
-| **IPC Bridge** | Electron `contextBridge` | Secure, typed, unidirectional and bidirectional IPC communication (`getStatus`, `getWhisperReadiness`). |
+| **IPC Bridge** | Electron `contextBridge` | Secure, typed, unidirectional and bidirectional IPC communication (`getStatus`, `whisper:*`, `ollama:*`). |
 | **Speech-to-Text** | `whisper.cpp` (v1.9.2) | Fast C/C++ GGML-based Whisper inference using `ggml-base.en.bin` on Windows CPU. |
-| **LLM Inference** | `Ollama` *(Phase 3)* | Local HTTP inference daemon serving quantized Qwen 2.5 models without cloud dependencies. |
+| **LLM Inference** | `Ollama` *(Phase 3)* | Local HTTP inference daemon serving `qwen2.5:3b` without cloud dependencies. |
 | **Audio Capture** | Web Audio API / AudioWorklet *(Phase 4)* | Native browser audio stream capture, 16 kHz downsampling, 16-bit PCM WAV chunking. |
 
 ---
@@ -64,8 +64,8 @@ To maintain high reliability, maintainability, and delivery before the November 
 - Standard Windows desktop operation with native look and feel.
 - Strict Electron security defaults (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`).
 - Clean separation between renderer and Node main process.
-- Robust child process lifecycle management (zero orphan processes on app shutdown).
-- Input validation (PCM WAV structure, sample rate, bit depth, silence detection).
+- Robust child process and stream lifecycle management (zero orphan processes on app shutdown).
+- Input validation (PCM WAV structure, prompt framing, anti-hallucination guards).
 - Graceful error states with actionable user setup instructions.
 
 ### ❌ Explicitly Out of Scope (Non-Goals)
@@ -91,11 +91,14 @@ To avoid ambiguity, the table below maps project elements to their exact project
 | **WAV Parser & Silence Detection** | Yes | Yes | ✅ Phase 2 | — | Expects 16-bit PCM WAV |
 | **Main Process Child Process Lifecycle** | Yes | Yes | ✅ Phase 2 | — | Windows task management |
 | **UI Whisper Readiness Status Indicator** | Yes | Yes | ✅ Phase 2 | — | Displays `Ready` vs `Unavailable` |
-| **Local Ollama LLM Service** | Yes | Yes | ⏳ Not Started | Phase 3 | Requires Ollama running locally |
-| **Streaming AI Response Generation** | Yes | Yes | ⏳ Not Started | Phase 3 | Currently placeholder string |
+| **Local Ollama LLM Service** | Yes | Yes | ✅ Phase 3 | — | Requires Ollama running locally |
+| **Streaming AI Response Generation** | Yes | Yes | ✅ Phase 3 | — | Streaming NDJSON via WebContents |
+| **Prompt Builder & Anti-Hallucination Guard** | Yes | Yes | ✅ Phase 3 | — | Bounds transcript to 12K chars |
+| **Stream Cancellation & Concurrency Guard** | Yes | Yes | ✅ Phase 3 | — | AbortController termination |
+| **Automated Ollama Test Suite** | Yes | Yes | ✅ Phase 3 | — | 36/36 assertions verified |
 | **Microphone Capture & AudioWorklet** | Yes | Yes | ⏳ Not Started | Phase 4 | Scaffold Start/Stop only |
 | **Real-time Audio Chunking & Resampling** | Yes | Yes | ⏳ Not Started | Phase 4 | Not yet feeding live audio |
-| **End-to-End State Machine Integration** | Yes | Yes | ⏳ Not Started | Phase 5 | UI buttons remain scaffold |
+| **End-to-End State Machine Integration** | Yes | Yes | ⏳ Not Started | Phase 5 | Live transcript wiring |
 | **Packaging & Submission Verification** | Yes | Yes | ⏳ Not Started | Phase 6 | Raw dev/build commands only |
 
 ---
@@ -110,4 +113,3 @@ To avoid ambiguity, the table below maps project elements to their exact project
 - [Decisions & Constraints](./DECISIONS_AND_CONSTRAINTS.md) — Permanent architectural rules and rationales.
 - [Implementation Status](./IMPLEMENTATION_STATUS.md) — Living inventory of verified features and technical risks.
 - [Changelog](./CHANGELOG.md) — Historical log of completed changes.
-

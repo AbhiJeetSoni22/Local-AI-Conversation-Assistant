@@ -1,18 +1,18 @@
 # Application Flow & State Machine
 
-This document outlines the complete operational lifecycle of the **Local AI Conversation Assistant**, distinguishing between the **currently implemented behavior (Phase 1 & Phase 2)** and the **intended end-to-end workflow (Phases 3 through 5)**.
+This document outlines the complete operational lifecycle of the **Local AI Conversation Assistant**, detailing the **implemented behavior (Phase 1, Phase 2, & Phase 3)** and the **intended audio streaming pipeline (Phases 4 through 5)**.
 
 ---
 
 ## 1. End-to-End Pipeline & Phase Mapping
 
-The diagram below illustrates the full lifecycle from launch to answer generation, indicating which phase owns each stage:
+The diagram below illustrates the full lifecycle from launch to answer generation, indicating implementation status across phases:
 
 ```text
 Application Launch
-    ↓ [Phase 1 & 2: IMPLEMENTED]
-Runtime & Model Readiness Check
-    ↓ [Phase 2: IMPLEMENTED]
+    ↓ [Phase 1, 2 & 3: IMPLEMENTED]
+Runtime & Model Readiness Check (Whisper + Ollama)
+    ↓ [Phase 2 & 3: IMPLEMENTED]
 User Clicks "Start"
     ↓ [Phase 1: SCAFFOLD ONLY / Phase 4: PENDING]
 Microphone Audio Capture (AudioWorklet)
@@ -22,52 +22,50 @@ Audio Resampling (16 kHz, 16-bit Mono PCM)
 Audio Chunking & Silence Filtering
     ↓ [Phase 2: VALIDATOR READY / Phase 4: PIPELINE PENDING]
 Local whisper.cpp Speech-to-Text
-    ↓ [Phase 2: ENGINE READY / Phase 4 & 5: STREAMING PENDING]
+    ↓ [Phase 2: ENGINE READY / Phase 4: STREAMING PENDING]
 Live Transcript Rolling Window
-    ↓ [Phase 1: UI READY / Phase 5: ACCUMULATION PENDING]
-User Clicks "Stop"
-    ↓ [Phase 1: SCAFFOLD ONLY / Phase 4: FLUSH PENDING]
-Final Audio Flush & Final Transcript Segment
-    ↓ [Phase 1: SCAFFOLD ONLY / Phase 3: PENDING]
+    ↓ [Phase 1: UI READY / Phase 3: SAMPLE LOAD / Phase 4: LIVE MIC]
 User Clicks "Suggest Answer"
-    ↓ [Phase 3: PENDING]
-Prompt Construction with Transcript Context
-    ↓ [Phase 3: PENDING]
-Local Ollama LLM Streaming (Qwen 2.5)
-    ↓ [Phase 3: PENDING]
-Progressive Token Streaming in Right Panel
-    ↓ [Phase 3: PENDING]
-Completed Suggested Answer
+    ↓ [Phase 3: IMPLEMENTED & VERIFIED]
+Prompt Construction with Strict Anti-Hallucination Framing
+    ↓ [Phase 3: IMPLEMENTED & VERIFIED]
+Local Ollama LLM Streaming (Qwen 2.5:3b)
+    ↓ [Phase 3: IMPLEMENTED & VERIFIED]
+Progressive Token Streaming in Right Panel (with Cancel Support)
+    ↓ [Phase 3: IMPLEMENTED & VERIFIED]
+Completed Suggested Answer & Metadata
 ```
 
 ---
 
-## 2. Actual Current State Model (Phase 1 & Phase 2)
+## 2. Implemented State Model (Phase 1, 2, & 3)
 
-Currently, the application tracks two independent states in `src/App.tsx`:
+The application tracks four key state dimensions in `src/App.tsx`:
 
 ### 1. Application Execution State (`status`)
 Controls the primary UI controls and button accessibility:
 - **`Idle`**: Initial state upon application launch.
-  - Buttons: `Start` is enabled; `Stop` is disabled; `Suggest Answer` is disabled.
-  - Panels: Live Transcript shows empty-state prompt; Suggested Answer shows empty-state prompt.
-- **`Listening`**: Entered when user clicks `Start`.
-  - Buttons: `Start` is disabled; `Stop` is enabled; `Suggest Answer` is enabled.
-  - Panels: Live Transcript displays active listening notice; Suggested Answer is enabled for placeholder demonstration.
-- **`Stopped`**: Entered when user clicks `Stop`.
-  - Buttons: `Start` is enabled; `Stop` is disabled; `Suggest Answer` is enabled.
-  - Panels: Retains any current placeholder or transcript content.
+  - Buttons: `Start` is enabled; `Stop` is disabled; `Suggest Answer` is disabled until transcript exists and Ollama is ready.
+  - Panels: Live Transcript shows empty-state prompt with "Load Sample Meeting Transcript"; Suggested Answer shows empty-state prompt.
+- **`Listening`**: Entered when user clicks `Start` (scaffold state in Phase 3).
+  - Buttons: `Start` is disabled; `Stop` is enabled.
+- **`Stopped`**: Entered when user clicks `Stop` or after generation finishes.
+  - Buttons: `Start` is enabled; `Stop` is disabled.
+- **`Generating`**: Entered when user clicks `Suggest Answer`.
+  - Buttons: `Start`, `Stop`, and `Suggest Answer` are disabled; `Cancel Generation` button appears.
+  - Panels: Suggested Answer displays purple streaming status badge, pulsing cursor, and progressively accumulating tokens.
 
 ### 2. Whisper Readiness State (`whisperStatus`)
-Tracks local speech engine health independently from UI interactions:
-- **`Checking`**: Default state while Electron main queries environment paths.
-  - Header: Displays blue badge `"Whisper: Checking"`.
+Tracks local speech engine health:
+- **`Checking`**: While Electron main queries environment paths.
 - **`Ready`**: Executable (`whisper-cli.exe` or `whisper-server.exe`) and model (`ggml-base.en.bin`) are verified.
-  - Header: Displays green badge `"Whisper: Ready"`.
-  - Footer: Displays active engine and model filename.
-- **`Unavailable`**: Executable or model is missing or invalid.
-  - Header: Displays red badge `"Whisper: Unavailable"`.
-  - Panels: Live Transcript displays warning card with setup instructions.
+- **`Unavailable`**: Executable or model is missing or invalid. Actionable warning card is rendered.
+
+### 3. Ollama Readiness State (`ollamaStatus`)
+Tracks local LLM daemon and model availability:
+- **`Checking`**: While Electron main queries `http://127.0.0.1:11434/api/version` and `/api/tags`.
+- **`Ready`**: Ollama daemon is reachable and target model (`qwen2.5:3b`) is verified.
+- **`Unavailable`**: Ollama daemon is offline or model is not pulled. An actionable warning card guides the user to install Ollama and run `ollama pull qwen2.5:3b`.
 
 ```mermaid
 stateDiagram-v2
@@ -76,64 +74,67 @@ stateDiagram-v2
         Idle --> Listening: User clicks "Start"
         Listening --> Stopped: User clicks "Stop"
         Stopped --> Listening: User clicks "Start"
+        Stopped --> Generating: User clicks "Suggest Answer"
+        Idle --> Generating: User clicks "Suggest Answer" (Transcript loaded)
+        Generating --> Stopped: Generation Completes or User Cancels
     }
 
-    state WhisperReadiness {
-        Checking --> Ready: Executable & Model Validated
-        Checking --> Unavailable: Binary/Model Missing or Corrupted
-        Unavailable --> Ready: Manual Re-check Succeeds
+    state Runtimes {
+        WhisperChecking --> WhisperReady: Executable & Model Validated
+        WhisperChecking --> WhisperUnavailable: Binary/Model Missing
+        OllamaChecking --> OllamaReady: Ollama Online & qwen2.5:3b Found
+        OllamaChecking --> OllamaUnavailable: Daemon Offline or Model Missing
     }
 ```
 
 ---
 
-## 3. Intended Complete State Model (Phases 3 through 5)
-
-In future phases, the UI state model will transition from independent scaffold flags into a unified, robust state machine:
+## 3. Streaming Suggest Answer Flow (Phase 3 Implemented Pipeline)
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Initializing: App Launch
-    Initializing --> Ready: Whisper & Ollama Online
-    Initializing --> Degraded: Whisper or Ollama Missing
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as React UI (App.tsx)
+    participant Preload as Preload Bridge
+    participant Main as Electron Main
+    participant Svc as OllamaService
+    participant Daemon as Ollama HTTP (:11434)
 
-    Ready --> Listening: User clicks "Start"
-    Degraded --> Ready: User fixes missing runtime
+    User->>UI: Clicks "Suggest Answer"
+    UI->>UI: Validate transcript not empty & Ollama is Ready
+    UI->>UI: setStatus('Generating'), setIsGenerating(true)
+    UI->>Preload: startAnswerGeneration(transcript)
+    Preload->>Main: ipcRenderer.invoke('ollama:start-generation')
+    Main->>Svc: generateStreaming(transcript, onChunk)
+    Svc->>Svc: buildAnswerPrompt(transcript)
+    Svc->>Daemon: POST /api/chat { model: 'qwen2.5:3b', stream: true }
 
-    state Listening {
-        [*] --> BufferingAudio
-        BufferingAudio --> TranscribingChunk: Audio Window Full
-        TranscribingChunk --> StreamingTranscript: Whisper Result
-        StreamingTranscript --> BufferingAudio
-    }
+    loop NDJSON Token Streaming
+        Daemon-->>Svc: {"message":{"content":"token"}, "done": false}
+        Svc->>Main: onChunk(token)
+        Main->>Preload: sender.send('ollama:stream-chunk', { chunk })
+        Preload->>UI: onOllamaChunk subscriber
+        UI->>UI: Append token to suggestedAnswer
+    end
 
-    Listening --> Finalizing: User clicks "Stop"
-    Finalizing --> Stopped: Audio Flushed & Transcribed
-
-    Stopped --> Generating: User clicks "Suggest Answer"
-    Generating --> Completed: Ollama Streams Completion
-    Completed --> Stopped: User can request new suggestion
-    Stopped --> Listening: User restarts session
-
-    Listening --> Error: Mic Unplugged / Process Crash
-    Generating --> Error: Ollama Timeout / Disconnect
-    Error --> Stopped: User acknowledges error
+    alt User clicks Cancel
+        User->>UI: Clicks "Cancel Generation"
+        UI->>Preload: cancelAnswerGeneration()
+        Preload->>Main: ipcRenderer.invoke('ollama:cancel-generation')
+        Main->>Svc: cancel() [AbortController.abort()]
+        Svc-->>Main: Returns isCancelled=true
+        Main->>Preload: sender.send('ollama:stream-cancelled')
+        Preload->>UI: onOllamaCancelled subscriber
+        UI->>UI: setIsGenerating(false), show "Generation Cancelled"
+    else Stream finishes normally
+        Daemon-->>Svc: {"done": true}
+        Svc-->>Main: Returns { fullText, durationMs, model }
+        Main->>Preload: sender.send('ollama:stream-done', meta)
+        Preload->>UI: onOllamaDone subscriber
+        UI->>UI: setIsGenerating(false), show duration and model meta
+    end
 ```
-
-### Detailed State Descriptions for Future Implementation:
-
-| State | Trigger | Sub-Processes Active | UI Behavior & Controls |
-| :--- | :--- | :--- | :--- |
-| **`Initializing`** | App launch | IPC queries for Whisper and Ollama | Shows loading spinners; action buttons disabled. |
-| **`Ready`** | All local runtimes verified | Idle | `Start` enabled; `Stop` and `Suggest Answer` disabled. |
-| **`Degraded`** | Missing model or Ollama offline | None | Disables unavailable features; shows actionable setup instructions. |
-| **`Listening`** | User clicks `Start` | Microphone AudioWorklet, Audio Resampler, Whisper Service | `Start` disabled; `Stop` enabled; real-time audio waveform active. |
-| **`Transcribing`** | Audio chunk boundary | `whisper-cli.exe` or server inference | Live transcript updates with newly recognized tokens. |
-| **`Finalizing`** | User clicks `Stop` | AudioWorklet teardown, final buffer flush | `Stop` button enters loading state until last segment completes. |
-| **`Stopped`** | Final flush complete | None | `Start` enabled; `Suggest Answer` enabled; transcript frozen. |
-| **`Generating`** | User clicks `Suggest Answer` | Ollama streaming request | `Suggest Answer` disabled; progressive text stream renders in right panel. |
-| **`Completed`** | Ollama finishes generation | None | Full answer displayed; copy / clear buttons enabled. |
-| **`Error`** | Audio disconnect or crash | Process disposal / recovery | Displays non-blocking notification; returns to safe state (`Stopped`). |
 
 ---
 
@@ -146,18 +147,3 @@ stateDiagram-v2
 5. **IPC Transmission**: Raw 16-bit PCM WAV buffers are transmitted to Electron main via `ipcRenderer.invoke('audio:chunk')`.
 6. **Inference**: Electron main invokes `whisperService.transcribe(buffer)`.
 7. **Stream Update**: Recognized text is returned via IPC and appended to the React transcript state.
-
----
-
-## 5. Ollama Answer Generation Flow (Phase 3 Intended Pipeline)
-
-1. **Context Assembly**: When the user clicks "Suggest Answer", the renderer aggregates the current transcript.
-2. **IPC Dispatch**: Renderer calls `window.electronApi.suggestAnswer(transcript)`.
-3. **Prompt Template**: Electron main formats the prompt:
-   ```text
-   System: You are an expert meeting assistant. Analyze the meeting transcript below and provide a concise, actionable answer or suggested response.
-   Transcript: {transcript}
-   ```
-4. **Token Streaming**: Electron main initiates a streaming request to `http://127.0.0.1:11434/api/generate` with model `qwen2.5:1.5b`.
-5. **Progressive Display**: Each incoming chunk is pushed to the renderer via `ipcRenderer.on('ollama:stream')`, updating the UI incrementally.
-

@@ -5,6 +5,7 @@
 [![React](https://img.shields.io/badge/React-18.3-61DAFB.svg)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-6.0-646CFF.svg)](https://vitejs.dev/)
 [![whisper.cpp](https://img.shields.io/badge/whisper.cpp-v1.9.2-green.svg)](https://github.com/ggml-org/whisper.cpp)
+[![Ollama](https://img.shields.io/badge/Ollama-Qwen%202.5%3A3b-orange.svg)](https://ollama.com)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20x64-0078D6.svg)](https://microsoft.com)
 
 A desktop conversational assistant built with **Electron**, **React**, **TypeScript**, and **Vite**, designed for **100% local-first, zero-cloud AI processing on Windows**.
@@ -17,16 +18,16 @@ A desktop conversational assistant built with **Electron**, **React**, **TypeScr
 | :--- | :--- | :---: | :--- |
 | **Phase 1** | Electron + React + TypeScript Desktop Scaffold | ✅ `Verified` | Desktop window initializes cleanly under `TEST_LAUNCH=1`. |
 | **Phase 2** | Whisper.cpp Local Speech-to-Text Foundation | ✅ `Verified` | Offline JFK transcription in 3.67s; 18/18 edge-case tests pass. |
-| **Phase 3** | Ollama Local LLM & Streaming Suggestions | ⏳ `Not Started` | Planned next milestone. |
+| **Phase 3** | Ollama Local LLM & Streaming Suggestions | ✅ `Verified` | Local Ollama streaming answers, cancel support; 36/36 tests pass. |
 | **Phase 4** | Microphone Audio Capture & AudioWorklet | ⏳ `Not Started` | UI controls currently demonstrate scaffold states. |
 | **Phase 5** | End-to-End Orchestration & Pipeline | ⏳ `Not Started` | Full reactive loop integration. |
 | **Phase 6** | Hardening, Air-Gapped Verification & Submission | ⏳ `Not Started` | Final submission deadline: November 4, 2026. |
 
 > ⚠️ **Strict Boundary Notice:**
-> - **Phases 1 & 2 are complete and verified.**
-> - Microphone live recording and streaming belong to **Phase 4**.
-> - Ollama LLM integration belongs to **Phase 3**.
+> - **Phases 1, 2, and 3 are complete and verified.**
+> - Microphone live recording and streaming belong strictly to **Phase 4**.
 > - The Start/Stop buttons currently demonstrate UI scaffold state transitions only.
+> - To test the Phase 3 "Suggest Answer" streaming workflow immediately, use the built-in **"Load Sample Meeting Transcript"** button in the Live Transcript panel.
 
 ---
 
@@ -38,14 +39,14 @@ All detailed architecture, setup, testing, and operational guides have been orga
 | :--- | :--- |
 | **[Project Overview](./docs/PROJECT_OVERVIEW.md)** | Purpose, internship requirements, technologies, core workflow, and scope boundaries. |
 | **[Project Roadmap](./docs/PROJECT_ROADMAP.md)** | Phase-by-phase roadmap, milestones, acceptance criteria, and status tracking. |
-| **[System Architecture](./docs/ARCHITECTURE.md)** | Main process, preload bridge, renderer, Whisper engine, and Mermaid architecture diagrams. |
-| **[Application Flow](./docs/APPLICATION_FLOW.md)** | End-to-end data pipeline, current state model vs intended unified state machine. |
-| **[Development Setup](./docs/DEVELOPMENT_SETUP.md)** | Clean Windows machine setup, manual whisper.cpp download steps, and prerequisites. |
-| **[Testing & Validation](./docs/TESTING_AND_VALIDATION.md)** | Automated test suites (`validate:whisper`, `test:whisper`), manual tests, and real results. |
-| **[Configuration Reference](./docs/CONFIGURATION.md)** | Directory conventions, Windows environment variables, and WAV audio parameters. |
-| **[Troubleshooting Guide](./docs/TROUBLESHOOTING.md)** | Diagnosing missing binaries/models, corrupt WAVs, port conflicts, and orphaned processes. |
+| **[System Architecture](./docs/ARCHITECTURE.md)** | Main process, preload bridge, renderer, Whisper engine, Ollama service, and Mermaid architecture diagrams. |
+| **[Application Flow](./docs/APPLICATION_FLOW.md)** | End-to-end data pipeline, state machine, and streaming Suggest Answer lifecycle. |
+| **[Development Setup](./docs/DEVELOPMENT_SETUP.md)** | Clean Windows machine setup, manual whisper.cpp and Ollama download steps. |
+| **[Testing & Validation](./docs/TESTING_AND_VALIDATION.md)** | Automated test suites (`validate:whisper`, `test:whisper`, `test:ollama`, `validate:ollama`). |
+| **[Configuration Reference](./docs/CONFIGURATION.md)** | Directory conventions, Windows environment variables, and WAV/prompt parameters. |
+| **[Troubleshooting Guide](./docs/TROUBLESHOOTING.md)** | Diagnosing missing binaries/models, Ollama daemon reachability, and orphaned processes. |
 | **[Implementation Status](./docs/IMPLEMENTATION_STATUS.md)** | Feature-by-feature verification matrix, audit observations, and technical debt log. |
-| **[Decisions & Constraints](./docs/DECISIONS_AND_CONSTRAINTS.md)** | Permanent engineering rules, technology rationales, and open design questions. |
+| **[Decisions & Constraints](./docs/DECISIONS_AND_CONSTRAINTS.md)** | Permanent engineering rules, technology rationales, and design trade-offs. |
 | **[Changelog](./docs/CHANGELOG.md)** | Historical version and release log. |
 
 ---
@@ -54,7 +55,7 @@ All detailed architecture, setup, testing, and operational guides have been orga
 
 ### 1. Prerequisites
 - **OS:** Windows 10 or 11 (64-bit x64)
-- **Node.js:** v20 or v22 LTS (tested on Node `v22.23.2`)
+- **Node.js:** v20 or v22 LTS (tested on Node `v20.18.3` and `v22.23.2`)
 - **npm:** v10+
 
 ### 2. Installation
@@ -68,11 +69,21 @@ npm install
 ```
 
 ### 3. Manual Whisper Runtime Setup (Phase 2 Requirement)
-To protect privacy and avoid silent downloads, place the verified binary and model in their respective folders (see [Development Setup Guide](./docs/DEVELOPMENT_SETUP.md) for full details):
-
+To protect privacy and avoid silent downloads, place the verified binary and model in their respective folders:
 1. **Executables:** Download [`whisper-bin-x64.zip`](https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2) from whisper.cpp v1.9.2 releases and extract all files into `./bin/` (ensuring `bin/whisper-cli.exe` and required DLLs are present).
 2. **Model:** Download [`ggml-base.en.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin) (~147.4 MB) from Hugging Face and place it into `./models/`.
 3. **Sample Audio (Optional):** Download [`jfk.wav`](https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav) into `./samples/`.
+
+### 4. Manual Ollama Setup (Phase 3 Requirement)
+1. **Install Ollama:** Download and install from [https://ollama.com/download/OllamaSetup.exe](https://ollama.com/download/OllamaSetup.exe).
+2. **Pull Model:** Open PowerShell and run:
+   ```powershell
+   ollama pull qwen2.5:3b
+   ```
+3. **Verify:**
+   ```powershell
+   ollama list
+   ```
 
 ---
 
@@ -82,13 +93,17 @@ To protect privacy and avoid silent downloads, place the verified binary and mod
 # 1. Type check
 npx tsc --noEmit
 
-# 2. Run standalone local Whisper speech recognition test
+# 2. Run Whisper speech recognition validation & failure tests (18 assertions)
 npm run validate:whisper
-
-# 3. Run failure modes and edge-cases test suite (18 assertions)
 npm run test:whisper
 
-# 4. Compile production bundles
+# 3. Run Ollama unit & integration test suite (36 assertions)
+npm run test:ollama
+
+# 4. Probe live local Ollama runtime and run test stream
+npm run validate:ollama
+
+# 5. Compile production bundles
 npm run build
 ```
 
@@ -113,5 +128,6 @@ npx electron .
 
 - **Strict Isolation:** `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true` are permanently enabled.
 - **100% Local-First:** Zero telemetry, zero cloud APIs, and zero network data transmission.
-- **Zero Orphan Processes:** Child processes are explicitly tracked and terminated on application exit hooks (`before-quit`, `will-quit`, `exit`).
+- **Anti-Hallucination Framing:** Transcripts are demarcated and prompts instruct the model to ground answers exclusively in the conversation.
+- **Zero Orphan Processes:** Child processes and HTTP streams are explicitly tracked and terminated on application exit hooks (`before-quit`, `will-quit`, `exit`).
 - **Git Hygiene:** Binary files (`.exe`, `.dll`), model files (`.bin`), and audio files (`.wav`) are strictly excluded in [`.gitignore`](./.gitignore).
