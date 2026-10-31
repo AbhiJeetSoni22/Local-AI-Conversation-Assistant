@@ -21,9 +21,9 @@ let testsRun = 0
 let testsPassed = 0
 let testsFailed = 0
 
-function assert(condition: boolean, testName: string, failureDetail?: string): void {
+function assert(condition: boolean | undefined, testName: string, failureDetail?: string): void {
   testsRun++
-  if (condition) {
+  if (Boolean(condition)) {
     testsPassed++
     console.log(`  ✅ PASS: ${testName}`)
   } else {
@@ -128,7 +128,7 @@ async function runTestSuite(): Promise<void> {
   })
   fs.unlinkSync(emptyModelPath)
   assert(
-    !corruptModelValidation.valid && corruptModelValidation.error?.includes('unexpectedly small'),
+    !corruptModelValidation.valid && Boolean(corruptModelValidation.error?.includes('unexpectedly small')),
     'Undersized/corrupted model rejected',
     corruptModelValidation.error
   )
@@ -138,16 +138,16 @@ async function runTestSuite(): Promise<void> {
 
   // 3a: Empty buffer
   const emptyBufferRes = validateWavBuffer(Buffer.alloc(0))
-  assert(!emptyBufferRes.valid && emptyBufferRes.error?.includes('empty'), 'Empty buffer rejected', emptyBufferRes.error)
+  assert(!emptyBufferRes.valid && Boolean(emptyBufferRes.error?.includes('empty')), 'Empty buffer rejected', emptyBufferRes.error)
 
   // 3b: Corrupted header (less than 44 bytes)
   const shortBufferRes = validateWavBuffer(Buffer.from('RIFF1234'))
-  assert(!shortBufferRes.valid && shortBufferRes.error?.includes('too small'), 'Truncated WAV header rejected', shortBufferRes.error)
+  assert(!shortBufferRes.valid && Boolean(shortBufferRes.error?.includes('too small')), 'Truncated WAV header rejected', shortBufferRes.error)
 
   // 3c: Non-RIFF format
   const badRiff = Buffer.from('NOT_A_RIFF_HEADER_12345678901234567890123456789012345678901234')
   const badRiffRes = validateWavBuffer(badRiff)
-  assert(!badRiffRes.valid && badRiffRes.error?.includes('expected "RIFF"'), 'Invalid RIFF magic rejected', badRiffRes.error)
+  assert(!badRiffRes.valid && Boolean(badRiffRes.error?.includes('expected "RIFF"')), 'Invalid RIFF magic rejected', badRiffRes.error)
 
   // 3d: Valid WAV with synthetic audio
   const syntheticWav = createSyntheticWav(1.5, 440, 0.5)
