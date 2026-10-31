@@ -141,3 +141,4 @@ To keep development focused, do **NOT** perform the following setup tasks yet:
 - **Ollama Installation:** Scheduled for **Phase 3**. You do not need to install Ollama or pull LLM models during Phase 2.
 - **Audio Capture Permissions / Virtual Audio Cables:** Scheduled for **Phase 4**.
 - **Packaging / Installer Setup:** Scheduled for **Phase 6**.
+

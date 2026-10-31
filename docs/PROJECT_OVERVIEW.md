@@ -110,3 +110,4 @@ To avoid ambiguity, the table below maps project elements to their exact project
 - [Decisions & Constraints](./DECISIONS_AND_CONSTRAINTS.md) — Permanent architectural rules and rationales.
 - [Implementation Status](./IMPLEMENTATION_STATUS.md) — Living inventory of verified features and technical risks.
 - [Changelog](./CHANGELOG.md) — Historical log of completed changes.
+

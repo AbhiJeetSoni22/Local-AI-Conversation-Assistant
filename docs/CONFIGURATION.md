@@ -97,3 +97,4 @@ Configured with `vite-plugin-electron/simple` for seamless HMR across both React
   "test:whisper": "tsx scripts/test-whisper-failures.ts"
 }
 ```
+

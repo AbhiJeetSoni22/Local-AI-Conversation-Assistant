@@ -63,3 +63,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Enforced valid button transition states (`Start` disabled when listening, `Stop` disabled when idle).
 - **Verification Scripts**:
   - Added `TEST_LAUNCH=1` headless verification hook in `electron/main.ts`.
+

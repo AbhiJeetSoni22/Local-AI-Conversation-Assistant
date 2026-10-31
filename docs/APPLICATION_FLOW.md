@@ -160,3 +160,4 @@ stateDiagram-v2
    ```
 4. **Token Streaming**: Electron main initiates a streaming request to `http://127.0.0.1:11434/api/generate` with model `qwen2.5:1.5b`.
 5. **Progressive Display**: Each incoming chunk is pushed to the renderer via `ipcRenderer.on('ollama:stream')`, updating the UI incrementally.
+

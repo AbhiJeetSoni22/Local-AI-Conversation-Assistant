@@ -201,3 +201,4 @@ This document catalogs all automated and manual verification procedures for the 
 | **UI State Transitions** | Manual Test | No | Interactive Desktop Window | ✅ `Verified` |
 | **Live Microphone Capture** | Integration Test | No | Phase 4 Scope | ⏳ `Not Started` |
 | **Ollama Streaming LLM** | Integration Test | No | Phase 3 Scope | ⏳ `Not Started` |
+

@@ -210,3 +210,4 @@ stateDiagram-v2
    - `process.once('exit', () => whisperService.dispose())`
    - `process.once('SIGINT', () => whisperService.dispose())`
    - `process.once('SIGTERM', () => whisperService.dispose())`
+

@@ -95,3 +95,4 @@ The following architectural topics require explicit decision during Phase 3 and 
 | **Whisper Mode for Live Audio** | **Option A:** `whisper-cli` on 3s WAV chunks<br/>**Option B:** `whisper-server` HTTP daemon | Option A is atomic and uses no idle memory, but has ~600ms model-load latency per chunk. Option B is faster per chunk but holds 150MB RAM continuously. | `Needs Confirmation` in Phase 4 |
 | **Qwen Model Size** | **Option A:** `qwen2.5:1.5b`<br/>**Option B:** `qwen2.5:3b` | 1.5B responds in < 1.5s on CPU; 3B provides slightly better nuance but takes 3–5s on CPU without GPU acceleration. | `Needs Confirmation` in Phase 3 |
 | **Audio Chunk Overlap Strategy** | **Option A:** Fixed sliding window with text deduplication<br/>**Option B:** Energy-based Voice Activity Detection (VAD) split | Sliding windows are simple but duplicate boundary words; VAD requires careful threshold calibration in noisy rooms. | `Needs Confirmation` in Phase 4 |
+

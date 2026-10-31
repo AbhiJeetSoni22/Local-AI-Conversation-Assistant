@@ -141,3 +141,4 @@ Get-Process -Name "whisper-cli", "whisper-server" -ErrorAction SilentlyContinue
 # Terminate if any are lingering
 Stop-Process -Name "whisper-cli", "whisper-server" -Force -ErrorAction SilentlyContinue
 ```
+

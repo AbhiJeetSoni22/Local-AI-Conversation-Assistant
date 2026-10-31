@@ -85,3 +85,4 @@ During this comprehensive documentation audit, the following risks and observati
 | **`samples/jfk.wav`** | Standalone Test | ✅ Present and verified | ⚠️ Optional manual download |
 | **`Ollama` Daemon** | Phase 3 | ⏳ Not required yet | ⏳ Not required yet |
 | **`qwen2.5` Model** | Phase 3 | ⏳ Not required yet | ⏳ Not required yet |
+
