@@ -1,174 +1,117 @@
 # Local AI Conversation Assistant (Windows)
 
-A desktop conversational assistant built with **Electron**, **React**, **TypeScript**, and **Vite**, designed for 100% local-first AI processing on Windows.
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
+[![Electron](https://img.shields.io/badge/Electron-33-47848F.svg)](https://www.electronjs.org/)
+[![React](https://img.shields.io/badge/React-18.3-61DAFB.svg)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-6.0-646CFF.svg)](https://vitejs.dev/)
+[![whisper.cpp](https://img.shields.io/badge/whisper.cpp-v1.9.2-green.svg)](https://github.com/ggml-org/whisper.cpp)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20x64-0078D6.svg)](https://microsoft.com)
+
+A desktop conversational assistant built with **Electron**, **React**, **TypeScript**, and **Vite**, designed for **100% local-first, zero-cloud AI processing on Windows**.
 
 ---
 
-## Current Status: Phase 2 Whisper Foundation Active
+## 📌 Implementation Status
 
-This repository currently implements **Phase 1 (Scaffold)** and **Phase 2 (Whisper.cpp Local Speech-to-Text Foundation)**:
+| Stage / Phase | Focus | Status | Evidence |
+| :--- | :--- | :---: | :--- |
+| **Phase 1** | Electron + React + TypeScript Desktop Scaffold | ✅ `Verified` | Desktop window initializes cleanly under `TEST_LAUNCH=1`. |
+| **Phase 2** | Whisper.cpp Local Speech-to-Text Foundation | ✅ `Verified` | Offline JFK transcription in 3.67s; 18/18 edge-case tests pass. |
+| **Phase 3** | Ollama Local LLM & Streaming Suggestions | ⏳ `Not Started` | Planned next milestone. |
+| **Phase 4** | Microphone Audio Capture & AudioWorklet | ⏳ `Not Started` | UI controls currently demonstrate scaffold states. |
+| **Phase 5** | End-to-End Orchestration & Pipeline | ⏳ `Not Started` | Full reactive loop integration. |
+| **Phase 6** | Hardening, Air-Gapped Verification & Submission | ⏳ `Not Started` | Final submission deadline: November 4, 2026. |
 
-- ✅ **Desktop Scaffold**: Electron + React 18 + TypeScript + Vite.
-- ✅ **Strict Process Isolation**: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, typed preload IPC bridge.
-- ✅ **Local Whisper.cpp Integration Foundation**:
-  - Typed Whisper configuration and path resolution supporting project conventions and environment variables.
-  - Strict WAV input validation (RIFF header, PCM format, 16 kHz sample rate, 16-bit depth, duration checks, silence handling).
-  - Main process typed `WhisperService` with full lifecycle management (zero orphan child processes on shutdown).
-  - Standalone validation script (`scripts/validate-whisper.ts`) verifying real local inference on sample audio without UI.
-  - Comprehensive negative failure and reliability test suite (`scripts/test-whisper-failures.ts`).
-  - UI readiness indicator (`Checking`, `Ready`, `Unavailable`) displaying clear actionable setup instructions if binary/model is missing.
-
-> ⚠️ **Strict Boundary Notice**:
-> - **Phase 3 (Ollama / Local LLM)**: NOT yet implemented.
-> - **Phase 4 (Microphone Audio Capture, AudioWorklet, live streaming)**: NOT yet implemented.
-> - The Start/Stop buttons remain temporary scaffold transitions until Phase 4 live audio capture is connected.
+> ⚠️ **Strict Boundary Notice:**
+> - **Phases 1 & 2 are complete and verified.**
+> - Microphone live recording and streaming belong to **Phase 4**.
+> - Ollama LLM integration belongs to **Phase 3**.
+> - The Start/Stop buttons currently demonstrate UI scaffold state transitions only.
 
 ---
 
-## Supported Windows Environment
+## 📖 Complete Documentation Index
 
-- **Operating System**: Windows 10 / Windows 11 (64-bit x64 architecture)
-- **Node.js**: v20 or v22 LTS (tested on Node v22.23.2)
-- **npm**: v10+
-- **Hardware**: CPU inference (AVX2 / Alderlake / Haswell instructions natively supported by whisper.cpp)
+All detailed architecture, setup, testing, and operational guides have been organized into the [`docs/`](./docs) directory:
 
----
-
-## Whisper.cpp Runtime & Model Requirements
-
-To preserve local privacy and prevent unintended network transfers, **the application never silently downloads binaries or models**. You must manually place the verified executable and model files in their designated directories.
-
-### 1. Verified Release & Files
-
-| Component | Source / Release | Target Location |
-| :--- | :--- | :--- |
-| **Executables & DLLs** | `whisper.cpp` Release **v1.9.2** (`whisper-bin-x64.zip`)<br>[GitHub Official Release](https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2) | `./bin/` |
-| **Model** | `ggml-base.en.bin` (~147.4 MB)<br>[Hugging Face Official Model](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin) | `./models/ggml-base.en.bin` |
-| **Sample Audio** | `jfk.wav` (16kHz, 16-bit, Mono PCM, Public Domain)<br>[whisper.cpp sample repository](https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav) | `./samples/jfk.wav` |
-
-*(Note: `bin/`, `models/`, and `samples/*.wav` are ignored by `.gitignore` and are not committed to source control).*
+| Document | Description |
+| :--- | :--- |
+| **[Project Overview](./docs/PROJECT_OVERVIEW.md)** | Purpose, internship requirements, technologies, core workflow, and scope boundaries. |
+| **[Project Roadmap](./docs/PROJECT_ROADMAP.md)** | Phase-by-phase roadmap, milestones, acceptance criteria, and status tracking. |
+| **[System Architecture](./docs/ARCHITECTURE.md)** | Main process, preload bridge, renderer, Whisper engine, and Mermaid architecture diagrams. |
+| **[Application Flow](./docs/APPLICATION_FLOW.md)** | End-to-end data pipeline, current state model vs intended unified state machine. |
+| **[Development Setup](./docs/DEVELOPMENT_SETUP.md)** | Clean Windows machine setup, manual whisper.cpp download steps, and prerequisites. |
+| **[Testing & Validation](./docs/TESTING_AND_VALIDATION.md)** | Automated test suites (`validate:whisper`, `test:whisper`), manual tests, and real results. |
+| **[Configuration Reference](./docs/CONFIGURATION.md)** | Directory conventions, Windows environment variables, and WAV audio parameters. |
+| **[Troubleshooting Guide](./docs/TROUBLESHOOTING.md)** | Diagnosing missing binaries/models, corrupt WAVs, port conflicts, and orphaned processes. |
+| **[Implementation Status](./docs/IMPLEMENTATION_STATUS.md)** | Feature-by-feature verification matrix, audit observations, and technical debt log. |
+| **[Decisions & Constraints](./docs/DECISIONS_AND_CONSTRAINTS.md)** | Permanent engineering rules, technology rationales, and open design questions. |
+| **[Changelog](./docs/CHANGELOG.md)** | Historical version and release log. |
 
 ---
 
-## Manual Setup Instructions
+## 🚀 Quickstart Guide
 
-Follow these exact steps to configure your local Whisper runtime:
+### 1. Prerequisites
+- **OS:** Windows 10 or 11 (64-bit x64)
+- **Node.js:** v20 or v22 LTS (tested on Node `v22.23.2`)
+- **npm:** v10+
 
-### Step 1: Install Dependencies
-```bash
+### 2. Installation
+```powershell
+# Clone the repository
+git clone https://github.com/AbhiJeetSoni22/Local-AI-Conversation-Assistant.git
+cd Local-AI-Conversation-Assistant
+
+# Install dependencies
 npm install
 ```
 
-### Step 2: Download whisper.cpp Executables
-1. Download `whisper-bin-x64.zip` from [whisper.cpp v1.9.2 Releases](https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2).
-2. Extract all contents into the `./bin` directory of this repository:
-   - Required: `bin/whisper-cli.exe`
-   - Required DLLs: `bin/whisper.dll`, `bin/ggml.dll`, `bin/ggml-base.dll`, `bin/ggml-cpu-*.dll`, `bin/SDL2.dll`
-   - Optional: `bin/whisper-server.exe`
+### 3. Manual Whisper Runtime Setup (Phase 2 Requirement)
+To protect privacy and avoid silent downloads, place the verified binary and model in their respective folders (see [Development Setup Guide](./docs/DEVELOPMENT_SETUP.md) for full details):
 
-### Step 3: Download the Whisper Model
-1. Download `ggml-base.en.bin` directly from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin).
-2. Place the downloaded file into the `./models` directory:
-   - Target path: `models/ggml-base.en.bin`
-
-### Step 4 (Optional): Provide Sample Audio for Validation
-1. Download `jfk.wav` from [GitHub whisper.cpp samples](https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav).
-2. Save it to `samples/jfk.wav`.
+1. **Executables:** Download [`whisper-bin-x64.zip`](https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2) from whisper.cpp v1.9.2 releases and extract all files into `./bin/` (ensuring `bin/whisper-cli.exe` and required DLLs are present).
+2. **Model:** Download [`ggml-base.en.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin) (~147.4 MB) from Hugging Face and place it into `./models/`.
+3. **Sample Audio (Optional):** Download [`jfk.wav`](https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav) into `./samples/`.
 
 ---
 
-## Path Configuration & Overrides
+## 🧪 Verification Commands
 
-By default, the application resolves paths relative to the project root:
-- Binary: `./bin/whisper-cli.exe` (or `whisper-server.exe`)
-- Model: `./models/ggml-base.en.bin`
-
-You can override these paths without modifying code by setting environment variables in Windows:
 ```powershell
-$env:WHISPER_BIN_PATH="C:\custom\path\to\whisper-cli.exe"
-$env:WHISPER_MODEL_PATH="C:\custom\path\to\ggml-base.en.bin"
-$env:WHISPER_ENGINE="cli" # or "server"
-```
+# 1. Type check
+npx tsc --noEmit
 
----
-
-## Verification & Standalone Validation
-
-### 1. Run Standalone Whisper Validation
-Tests your local whisper runtime, model, and runs a complete offline transcription against the sample audio file without launching Electron or requiring microphone access:
-
-```bash
+# 2. Run standalone local Whisper speech recognition test
 npm run validate:whisper
-```
 
-**Expected output:**
-```
-=====================================================
-   Whisper.cpp Local Transcription Validation
-=====================================================
-...
-[Step 3/4] Running local Whisper transcription...
-   ✅ Transcription completed successfully!
-
-Recognized Text: "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
-Duration:        3666 ms (3.67s)
-Engine:          cli
-Model:           ggml-base.en.bin
-🎉 Standalone Whisper validation succeeded! Foundation verified.
-```
-
-### 2. Run Failure Modes & Edge-Cases Test Suite
-Validates negative pathways, missing executables, undersized/corrupted models, invalid WAV headers, silence detection, port conflicts, and lifecycle cleanup:
-
-```bash
+# 3. Run failure modes and edge-cases test suite (18 assertions)
 npm run test:whisper
-```
 
-**Expected output:**
-```
-Results: 18 / 18 passed (0 failed)
+# 4. Compile production bundles
+npm run build
 ```
 
 ---
 
-## Running the Desktop Application
+## 💻 Running the Application
 
-### In Development:
-```bash
+### In Development (with HMR):
+```powershell
 npm run dev
 ```
 
-### Building & Running Production:
-```bash
+### In Production:
+```powershell
 npm run build
 npx electron .
 ```
 
 ---
 
-## Troubleshooting Guide
+## 🔒 Security & Engineering Standards
 
-| Issue | Cause | Solution |
-| :--- | :--- | :--- |
-| **UI displays `Whisper: Unavailable`** | Executable or model file is missing at `./bin` or `./models`. | Check that `bin/whisper-cli.exe` and `models/ggml-base.en.bin` exist and are accessible. |
-| **"Model file unexpectedly small"** | Download was interrupted or corrupted. | Re-download `ggml-base.en.bin` from Hugging Face (expected size is ~147.4 MB). |
-| **"Invalid WAV header: expected RIFF"** | Audio file is not an uncompressed WAV. | Ensure audio is 16-bit PCM WAV (convert via Audacity or ffmpeg: `-ar 16000 -ac 1 -c:a pcm_s16le`). |
-| **Port occupied error (server mode)** | Another process is using port 8080/8089. | Switch to CLI mode (`$env:WHISPER_ENGINE="cli"`) or change port with `$env:WHISPER_PORT="8095"`. |
-| **Orphaned child processes** | Unexpected crash during development. | The app automatically kills child processes on exit. To verify in PowerShell: `Get-Process whisper*`. |
-
----
-
-## Architecture & Security Enforcement
-
-- **Sandbox & Isolation**:
-  - `contextIsolation: true`
-  - `nodeIntegration: false`
-  - `sandbox: true`
-- **Zero Cloud Leakage**: All speech recognition is performed strictly on local hardware. No audio or text is sent to third-party APIs.
-- **Child Process Lifecycle**: Electron main registers `before-quit` and `will-quit` hooks to terminate all spawned child processes.
-
----
-
-## Next Steps: Phase 3
-
-In **Phase 3**, local Ollama LLM integration will be added in Electron main to generate suggested answers based on transcribed context. Live microphone capture will follow in **Phase 4**.
+- **Strict Isolation:** `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true` are permanently enabled.
+- **100% Local-First:** Zero telemetry, zero cloud APIs, and zero network data transmission.
+- **Zero Orphan Processes:** Child processes are explicitly tracked and terminated on application exit hooks (`before-quit`, `will-quit`, `exit`).
+- **Git Hygiene:** Binary files (`.exe`, `.dll`), model files (`.bin`), and audio files (`.wav`) are strictly excluded in [`.gitignore`](./.gitignore).
