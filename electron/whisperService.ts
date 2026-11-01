@@ -9,6 +9,9 @@ import {
   WhisperEnvValidation,
 } from './whisperConfig'
 import { validateWavFile, validateWavBuffer } from './wavValidator'
+import { filterWhisperMarkers } from './vocabularyConfig'
+
+export { filterWhisperMarkers } from './vocabularyConfig'
 
 export interface TranscriptionResult {
   text: string
@@ -292,6 +295,10 @@ export class WhisperService {
       '-np', // Do not print anything other than results
     ]
 
+    if (this.config.initialPrompt && this.config.initialPrompt.trim()) {
+      args.push('--prompt', this.config.initialPrompt.trim())
+    }
+
     return new Promise((resolve, reject) => {
       let settled = false
 
@@ -357,21 +364,30 @@ export class WhisperService {
               this.cleanupFile(expectedJsonFile)
 
               const parsed = JSON.parse(rawJson)
-              let text = ''
+              let rawText = ''
 
               if (Array.isArray(parsed.transcription)) {
-                text = parsed.transcription
+                rawText = parsed.transcription
                   .map((t: { text?: string }) => (typeof t.text === 'string' ? t.text.trim() : ''))
                   .filter(Boolean)
                   .join(' ')
               } else if (typeof parsed.text === 'string') {
-                text = parsed.text.trim()
+                rawText = parsed.text.trim()
+              }
+
+              const cleanedText = filterWhisperMarkers(rawText)
+
+              if (process.env.DEBUG_AUDIO === '1' || process.env.NODE_ENV !== 'production') {
+                console.log(
+                  `[Whisper CLI] Transcribed in ${durationMs}ms: ` +
+                  `raw="${rawText}" -> cleaned="${cleanedText}"`
+                )
               }
 
               resolve({
-                text,
+                text: cleanedText,
                 durationMs,
-                isSilent: false,
+                isSilent: cleanedText.length === 0,
                 modelUsed: path.basename(this.config.modelPath),
                 engine: 'cli',
               })
@@ -412,6 +428,10 @@ export class WhisperService {
     formData.append('file', new Blob([fileBuffer], { type: 'audio/wav' }), 'audio.wav')
     formData.append('response_format', 'json')
 
+    if (this.config.initialPrompt && this.config.initialPrompt.trim()) {
+      formData.append('prompt', this.config.initialPrompt.trim())
+    }
+
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -430,12 +450,20 @@ export class WhisperService {
       }
 
       const json = await response.json()
-      const text = typeof json.text === 'string' ? json.text.trim() : ''
+      const rawText = typeof json.text === 'string' ? json.text.trim() : ''
+      const cleanedText = filterWhisperMarkers(rawText)
+
+      if (process.env.DEBUG_AUDIO === '1' || process.env.NODE_ENV !== 'production') {
+        console.log(
+          `[Whisper Server] Transcribed in ${Date.now() - startTime}ms: ` +
+          `raw="${rawText}" -> cleaned="${cleanedText}"`
+        )
+      }
 
       return {
-        text,
+        text: cleanedText,
         durationMs: Date.now() - startTime,
-        isSilent: false,
+        isSilent: cleanedText.length === 0,
         modelUsed: path.basename(this.config.modelPath),
         engine: 'server',
       }

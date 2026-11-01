@@ -4,7 +4,7 @@ import {
   OllamaConfig,
   OllamaReadiness,
 } from './ollamaConfig'
-import { buildAnswerPrompt } from './promptBuilder'
+import { buildAnswerPrompt, PromptOptions } from './promptBuilder'
 
 export interface GenerationResult {
   fullText: string
@@ -68,17 +68,19 @@ export class OllamaService {
    *
    * @param transcript Untrusted conversation text
    * @param onChunk Callback invoked progressively as tokens arrive
+   * @param options Optional prompt customization parameters
    */
   public async generateStreaming(
     transcript: string,
-    onChunk: (chunk: string) => void
+    onChunk: (chunk: string) => void,
+    options?: PromptOptions
   ): Promise<GenerationResult> {
     if (this._isGenerating) {
       throw new Error('A generation request is already in progress. Please wait or cancel the current request.')
     }
 
     // 1. Build and validate prompt synchronously
-    const prompt = buildAnswerPrompt(transcript)
+    const prompt = buildAnswerPrompt(transcript, options)
 
     // Mark as generating immediately to lock out concurrent calls
     this._isGenerating = true

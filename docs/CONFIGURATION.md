@@ -34,6 +34,8 @@ The application can be configured at runtime via standard Windows environment va
 | **`WHISPER_ENGINE`** | String | `cli` | Whisper engine mode: `'cli'` for atomic CLI invocation, or `'server'` for HTTP daemon mode. |
 | **`WHISPER_HOST`** | String | `127.0.0.1` | Host interface for `whisper-server.exe`. |
 | **`WHISPER_PORT`** | Number | `8080` | Port for `whisper-server.exe`. |
+| **`WHISPER_INITIAL_PROMPT`** | String | *(unset / empty)* | Optional initial prompt string passed as `--prompt` to Whisper to condition vocabulary recognition. Defaults to empty for clean baseline decoding. |
+| **`DEBUG_AUDIO`** | String | *(unset)* | Set to `"1"` to enable verbose dev console diagnostics for audio chunk energy, Whisper CLI transcription timings, and raw vs cleaned output. |
 
 ### Ollama Configuration (Phase 3)
 | Variable | Type | Default | Description |
@@ -92,7 +94,7 @@ The prompt builder sanitizes untrusted conversation transcripts before passing t
 | **Maximum Transcript Length** | 12,000 chars | If transcript exceeds this limit, older conversation is trimmed while preserving the most recent context and appending a truncation notice. |
 | **Context Fencing** | `--- BEGIN TRANSCRIPT ---` / `--- END TRANSCRIPT ---` | Explicit demarcation boundaries prevent prompt injection and model confusion. |
 | **Default Temperature** | `0.7` | Balances concise response generation with conversational fluidity. |
-| **Anti-Hallucination Framing** | Strict System Prompt | Model is instructed to base answers exclusively on the transcript, acknowledge incomplete context politely, and avoid fabricated credentials. |
+| **Speech-Aware Conversational Framing** | System Prompt Instructions | Instructs model to expect real-time speech transcripts, infer speaker intent despite minor acoustic imperfections, explain technical concepts (LangChain, LLMs, RAG) concisely using domain knowledge, and ignore stray transcription noise or YouTube boilerplate hallucinations. |
 
 ---
 
@@ -124,6 +126,7 @@ Configured with `vite-plugin-electron/simple` for seamless HMR across both React
   "test:whisper": "tsx scripts/test-whisper-failures.ts",
   "validate:ollama": "tsx scripts/validate-ollama.ts",
   "test:ollama": "tsx scripts/test-ollama.ts",
-  "test:audio": "tsx scripts/test-phase4-audio.ts"
+  "test:audio": "tsx scripts/test-phase4-audio.ts",
+  "test:accuracy": "tsx scripts/test-transcription-accuracy.ts"
 }
 ```

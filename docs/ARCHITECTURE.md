@@ -170,6 +170,7 @@ The renderer represents the client presentation layer:
 - **`resampler.ts`**: Pure DSP utilities for multi-channel downmixing (`downmixToMono`), linear interpolation with anti-aliasing low-pass filtering (`resampleTo16k`), and Root-Mean-Square energy calculation (`calculateRms`).
 - **`wavEncoder.ts`**: Encodes 16 kHz Float32 PCM arrays into standard 44-byte header 16-bit linear PCM (`pcm_s16le`) RIFF/WAVE buffers (`Uint8Array`). Evaluates RMS energy against silence threshold (`0.005`) to discard silent chunks before IPC transmission.
 - **`transcriptionQueue.ts`**: Strict FIFO sequential worker queue that prevents concurrent `whisper-cli.exe` invocations. Implements session ID validation (drops stale chunks from previous recordings) and queue depth backpressure capping (`maxQueueDepth = 3`) to prevent memory pressure when Whisper transcription duration exceeds audio window duration.
+- **`electron/vocabularyConfig.ts`**: Strips acoustic markers (`[BLANK_AUDIO]`, `[MUSIC]`, `(applause)`, `(whirring)`) and low-confidence YouTube boilerplate from output, while leaving genuine spoken speech intact. Optional initial prompt conditioning is configurable via `WHISPER_INITIAL_PROMPT`.
 
 ---
 
@@ -280,3 +281,5 @@ sequenceDiagram
 3. **Non-Overlapping Chunks**: Audio chunks are partitioned into distinct 3.0-second non-overlapping windows to avoid duplicate words in the live transcript.
 4. **Sequential Processing & Backpressure**: `TranscriptionQueue` processes one chunk at a time, enforcing an absolute ceiling (`maxQueueDepth = 3`). If Whisper inference takes longer than real-time on lower-power CPUs, older pending chunks are safely dropped to prevent latency accumulation and memory growth.
 5. **Session Isolation**: Each recording cycle is assigned a unique `sessionId`. When the user clicks "Stop" and "Start" again, all queued chunks from superseded sessions are rejected immediately without executing Whisper.
+6. **Technical Vocabulary Initial Prompt**: `vocabularyConfig.ts` supplies a curated technical vocabulary context passed via `--prompt` to `whisper-cli.exe`, dramatically improving proper noun recognition (e.g., `LangChain`, `LLM`, `RAG`, `React`, `TypeScript`) while preserving non-technical words (`link chain`) in normal contexts.
+7. **Whisper Marker Suppression & Filtering**: Non-speech acoustic markers (e.g., `[BLANK_AUDIO]`, `[MUSIC]`, `[SILENCE]`, `(applause)`) are filtered cleanly from user-facing text before IPC dispatch, and non-speech tokens are suppressed natively via the `-sns` flag.

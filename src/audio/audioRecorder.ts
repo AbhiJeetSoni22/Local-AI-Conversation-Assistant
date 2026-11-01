@@ -204,6 +204,13 @@ export class AudioRecorder {
   private emitChunk(samples: Float32Array, isFinal: boolean): void {
     const encoded = encodeWav16kMono(samples, 16000, this.options.silenceThreshold)
 
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(
+        `[AudioRecorder] Emitting chunk #${this.chunkIndex}: ` +
+        `duration=${encoded.durationSec.toFixed(2)}s, rms=${encoded.rms.toFixed(4)}, silent=${encoded.isSilent}, final=${isFinal}`
+      )
+    }
+
     this.options.onChunk({
       wavBuffer: encoded.wavBuffer,
       durationSec: encoded.durationSec,

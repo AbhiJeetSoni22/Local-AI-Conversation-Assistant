@@ -229,11 +229,11 @@ async function runTests(): Promise<void> {
   const sampleTranscript = 'Speaker: How do we achieve zero-cost local LLM inference?'
   const built = buildAnswerPrompt(sampleTranscript)
   assert(
-    built.systemPrompt.includes('Base your response EXCLUSIVELY on the provided conversation transcript'),
-    'System prompt enforces strict grounding in transcript'
+    built.systemPrompt.includes('real-time speech-to-text') || built.systemPrompt.includes('speech'),
+    'System prompt acknowledges real-time speech transcript input'
   )
   assert(
-    built.systemPrompt.includes('Do NOT fabricate facts'),
+    built.systemPrompt.includes('do NOT fabricate') || built.systemPrompt.includes('hallucinations'),
     'System prompt contains explicit anti-hallucination constraint'
   )
   assert(

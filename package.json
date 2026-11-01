@@ -12,7 +12,8 @@
     "test:whisper": "tsx scripts/test-whisper-failures.ts",
     "validate:ollama": "tsx scripts/validate-ollama.ts",
     "test:ollama": "tsx scripts/test-ollama.ts",
-    "test:audio": "tsx scripts/test-phase4-audio.ts"
+    "test:audio": "tsx scripts/test-phase4-audio.ts",
+    "test:accuracy": "tsx scripts/test-transcription-accuracy.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

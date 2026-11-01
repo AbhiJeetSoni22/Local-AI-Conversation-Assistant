@@ -106,7 +106,10 @@ npm run validate:ollama
 # 5. Run Audio Capture & Live Pipeline test suite (22 assertions)
 npm run test:audio
 
-# 6. Compile production bundles
+# 6. Run Transcription Accuracy, Hallucination Suppression & Answer Relevance suite (44 assertions)
+npm run test:accuracy
+
+# 7. Compile production bundles
 npm run build
 ```
 

@@ -104,10 +104,19 @@ ipcMain.handle('whisper:transcribe-chunk', async (_event, payload: {
       : Buffer.from(audioBuffer as ArrayBuffer)
 
     const result = await whisperService.transcribe(buffer)
+    const cleanedText = result.text.trim()
+
+    if (process.env.DEBUG_AUDIO === '1' || process.env.NODE_ENV !== 'production') {
+      console.log(
+        `[IPC Audio] Chunk #${chunkIndex} (${buffer.length} bytes, session=${sessionId}): ` +
+        `silent=${result.isSilent}, transcribed="${cleanedText}" (${result.durationMs}ms)`
+      )
+    }
+
     return {
-      text: result.text.trim(),
+      text: cleanedText,
       durationMs: result.durationMs,
-      isSilent: Boolean(result.isSilent),
+      isSilent: Boolean(result.isSilent || cleanedText.length === 0),
       sessionId,
       chunkIndex,
       isFinal: Boolean(isFinal),

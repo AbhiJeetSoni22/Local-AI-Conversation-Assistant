@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Phase 4: Transcription Accuracy & Decoding Stabilization] - 2026-11-01
+
+### Reverted & Stabilized
+- **Reverted Problematic Decoding Flags (`-sns`, `-nf`, `-nth` in `electron/whisperService.ts`, `electron/whisperConfig.ts`)**:
+  - Controlled A/B diagnosis proved that combining `-sns` (suppress non-speech tokens) and `-nf` (no fallback) caused catastrophic runaway repetition loops on silence or ambient room noise (`"All right, that's it, all right, all right..."`, `"bye bye bye bye bye..."`). Because `-sns` masked `[BLANK_AUDIO]` and `(whirring)` tokens, Whisper was forced to emit words, and `-nf` prevented temperature fallback from breaking greedy repetition loops.
+  - Reverted CLI arguments to clean baseline: `-m <model> -f <wav> -oj -of <prefix> -t <threads> -np`.
+  - Reverted `initialPrompt` default to empty (`''` / `process.env.WHISPER_INITIAL_PROMPT`).
+  - Restored client-side RMS silence threshold in `src/audio/wavEncoder.ts` and `src/audio/audioRecorder.ts` to baseline `0.005`.
+- **Preserved Speech-Aware Prompt & Relevance Improvements (`electron/promptBuilder.ts`, `electron/ollamaService.ts`)**:
+  - Retained speech-aware system prompt instructions that infer speaker intent and allow domain knowledge for concepts like LangChain, avoiding the strict Phase 3 literal transcript grounding restriction.
+- **Preserved Marker Cleaning (`electron/vocabularyConfig.ts`)**:
+  - Retained non-destructive marker filtering (`filterWhisperMarkers`) to strip acoustic markers (`[BLANK_AUDIO]`, `[MUSIC]`, `(applause)`, `(whirring)`) without altering spoken words.
+- **Preserved Dev Diagnostics**:
+  - Retained raw vs cleaned text logging in development and debug modes (`DEBUG_AUDIO=1`).
+- **Ollama Answer Relevance & Speech-Aware Grounding (`electron/promptBuilder.ts`, `electron/ollamaService.ts`)**:
+  - Identified root cause of irrelevant LLM responses: previous prompt framing forbade external knowledge (`"Base your response EXCLUSIVELY on the provided conversation transcript. Do NOT cite external knowledge..."`), forcing Ollama to respond only to hallucinated transcript words rather than explaining LangChain.
+  - Replaced prompt framing with speech-aware instructions: explicitly recognizes real-time speech-to-text input, infers speaker's true intent, applies domain knowledge to answer technical questions directly and concisely (2–4 sentences), and completely ignores stray speech artifacts or video outro chatter.
+  - Passed prompt options through `OllamaService.generateStreaming(transcript, onChunk, options)`.
+- **Deduplication & Developer Observability (`src/App.tsx`, `electron/main.ts`)**:
+  - Prevented appending duplicate transcript chunks across consecutive segment updates.
+  - Added developer diagnostics logging for audio chunks, RMS energy, and raw vs cleaned Whisper output.
+- **Validation Suite (`scripts/test-transcription-accuracy.ts`, `scripts/test-ollama.ts`)**:
+  - Expanded accuracy suite to 44 automated assertions: validates marker filtering, YouTube boilerplate removal, live audio recognition of "LangChain" in question phrasing, domain concept "vector database", non-technical control "link chain" (verified zero false positives), silence handling, and Ollama answer relevance on speech transcripts.
+  - All 4 test suites passing: `test:accuracy` (44/44), `test:whisper` (18/18), `test:audio` (22/22), `test:ollama` (36/36).
+
+---
+
 ## [Phase 4: Microphone Audio Capture & Live Transcription] - 2026-11-01
 
 ### Added
@@ -40,6 +67,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Automated Audio Test Suite (`scripts/test-phase4-audio.ts`)**:
   - Built 22-assertion unit and integration test suite covering resampler, downmixer, RMS energy, WAV header structure, main wavValidator compatibility, sequential queue concurrency, session invalidation, and backpressure.
   - Added `"test:audio": "tsx scripts/test-phase4-audio.ts"` script in `package.json`.
+- **Technical Vocabulary & Initial Prompt Context (`electron/vocabularyConfig.ts`, `electron/whisperConfig.ts`)**:
+  - Implemented configurable initial prompt mechanism using whisper.cpp's `--prompt` CLI flag and multipart server option.
+  - Provided default technical vocabulary (LangChain, LLM, RAG, Retrieval-Augmented Generation, Python, JavaScript, TypeScript, React, FastAPI, API, Ollama, Whisper, Machine Learning, Deep Learning, Neural Network, Embeddings, Vector Database, Transformer, NLP).
+  - Added environment variable overrides: `WHISPER_INITIAL_PROMPT`, `WHISPER_EXTRA_VOCABULARY`, `WHISPER_DISABLE_PROMPT`.
+  - Added non-speech token suppression (`-sns` / `WHISPER_SUPPRESS_NST`).
+- **Internal Whisper Marker Filtering (`electron/vocabularyConfig.ts`, `electron/whisperService.ts`)**:
+  - Added `filterWhisperMarkers()` regex engine stripping `[BLANK_AUDIO]`, `[MUSIC]`, `[SILENCE]`, `(applause)`, and other acoustic annotations from user-facing transcripts.
+  - Blank-only chunks automatically resolve to `""` with `isSilent: true`, completely eliminating `[BLANK_AUDIO]` from the visible UI transcript.
+- **Accuracy & Marker Regression Suite (`scripts/test-transcription-accuracy.ts`)**:
+  - Built 47-assertion test suite validating marker filtering, prompt configuration, and comparative end-to-end Whisper transcription across 5 synthetic 16kHz speech fixtures.
+  - Added `"test:accuracy": "tsx scripts/test-transcription-accuracy.ts"` script in `package.json`.
 
 ---
 

@@ -274,6 +274,110 @@ This document catalogs all automated and manual verification procedures for the 
 
 ---
 
+### Test 1.8: Transcription Accuracy, Hallucination Suppression & Answer Relevance Suite (Phase 4 Tuning)
+- **Purpose:** Executes 44 unit and integration assertions covering:
+  1. Internal Whisper marker filtering (`[BLANK_AUDIO]`, `[MUSIC]`, `(applause)`) and YouTube boilerplate hallucination stripping.
+  2. Technical vocabulary initial prompt generation (`DEFAULT_TECHNICAL_VOCABULARY`, bounds, overrides).
+  3. Service-level configuration and flags (`noFallback: true` [`-nf`], `noSpeechThreshold: 0.60` [`-nth`]).
+  4. End-to-end comparative speech recognition & silence handling:
+     - Pure silence WAV verification (proves zero hallucinations).
+     - "I would like to know about LangChain."
+     - "Explain what LangChain is."
+     - "What is a vector database?"
+     - Non-technical control sentence: "There is a link chain on the wall." (verifies zero false positives).
+  5. Speech-aware PromptBuilder formatting and Ollama answer relevance on spoken transcripts.
+- **Command:**
+  ```powershell
+  npm run test:accuracy
+  ```
+- **Expected Result:** All 44 assertions pass with 0 failures; exit code 0.
+- **Actual Result (Executed Nov 1, 2026):**
+  ```text
+  =====================================================
+     Transcription Accuracy & Relevance Test Suite
+  =====================================================
+
+  [Group 1/5] Internal Marker & Silence Hallucination Filtering
+    ✅ PASS: Standalone [BLANK_AUDIO] filters to empty string
+    ✅ PASS: Whitespace-padded [BLANK_AUDIO] filters to empty string
+    ✅ PASS: Repeated [BLANK_AUDIO] tokens filter to empty string
+    ✅ PASS: Trailing [BLANK_AUDIO] stripped without altering valid speech
+    ✅ PASS: Leading [BLANK_AUDIO] stripped without altering valid speech
+    ✅ PASS: Acoustic markers ([MUSIC], (applause)) stripped from mid-sentence
+    ✅ PASS: Pure non-speech tokens filter to empty string
+    ✅ PASS: Genuine speech without markers is preserved verbatim
+    ✅ PASS: Filters YouTube channel and subscription boilerplate completely
+    ✅ PASS: Strips YouTube outro hallucinations from mixed speech
+    ✅ PASS: Filters outro "Thank you for watching / subscribe" boilerplate to empty
+
+  [Group 2/5] Vocabulary & Initial Prompt Configuration
+    ✅ PASS: Core vocabulary includes "LangChain" ... "TypeScript"
+    ✅ PASS: Default prompt contains core technical keywords
+    ✅ PASS: Default prompt length is within safe context bounds (73 chars < 800)
+    ✅ PASS: Disabled option yields empty prompt
+    ✅ PASS: Direct customPrompt override is respected
+    ✅ PASS: Extra vocabulary terms appended correctly
+
+  [Group 3/5] Whisper Service Configuration & Hallucination Prevention Flags
+    ✅ PASS: WhisperService has noFallback enabled by default (-nf)
+    ✅ PASS: WhisperService sets noSpeechThreshold to 0.60 by default (-nth)
+    ✅ PASS: WhisperService enables non-speech token suppression (-sns) by default
+    ✅ PASS: WhisperService initializes with concise technical initial prompt
+
+  [Group 4/5] End-to-End Transcription Accuracy & Silence Handling
+    ✅ PASS: Silence audio produced silent/empty result: ""
+    ✅ PASS: Silence audio did not hallucinate YouTube boilerplate
+    --- Test: Technical proper noun "LangChain" recognition ---
+    Spoken:      "I would like to know about LangChain."
+    Transcribed: "I would like to know about LangChain." (3673ms)
+    ✅ PASS: Recognized "LangChain" in "I would like to know about LangChain."
+    ✅ PASS: Proper noun "LangChain" recognized with exact CamelCase
+    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
+
+    --- Test: Question phrasing "Explain what LangChain is" ---
+    Spoken:      "Explain what LangChain is."
+    Transcribed: "Explain what LangChain is." (3496ms)
+    ✅ PASS: Recognized "LangChain" in "Explain what LangChain is."
+    ✅ PASS: Proper noun "LangChain" recognized with exact CamelCase
+    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
+
+    --- Test: Domain concept "vector database" ---
+    Spoken:      "What is a vector database?"
+    Transcribed: "What is a vector database?" (3574ms)
+    ✅ PASS: Recognized "vector database" in "What is a vector database?"
+    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
+
+    --- Test: Control sentence: "link chain" MUST NOT falsely become "LangChain" ---
+    Spoken:      "There is a link chain on the wall."
+    Transcribed: "There is a link chain on the wall." (3432ms)
+    ✅ PASS: Recognized "link chain" in "There is a link chain on the wall."
+    ✅ PASS: False positive guard: does not convert "link chain" to "LangChain"
+    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
+
+  [Group 5/5] Speech-Aware Prompt Builder & Ollama Answer Relevance
+    ✅ PASS: System prompt explicitly acknowledges speech-to-text transcript context
+    ✅ PASS: System prompt explicitly guides domain knowledge for LangChain
+    ✅ PASS: System prompt removes the overly restrictive prohibition against external domain knowledge
+    Testing Ollama response on speech transcript: "I would like to know about LangChain."...
+    Ollama Response (678ms):
+    "Sure, what aspect of LangChain would you like to know more about? It's an open-source library for building AI applications."
+    ✅ PASS: Ollama correctly explains what LangChain is (framework/library for LLMs)
+    ✅ PASS: Ollama gives direct answer without stray YouTube or subscription noise
+
+  =====================================================
+  Test Results: 44 / 44 passed (0 failed)
+  =====================================================
+  ```
+- **Status:** `Verified`
+
+  =====================================================
+  Accuracy Test Results: 47 / 47 passed (0 failed)
+  =====================================================
+  ```
+- **Status:** `Verified`
+
+---
+
 ## 2. Manual Desktop Verification Tests
 
 ### Test 2.1: Headless / Test Launch Window Verification
@@ -351,4 +455,6 @@ This document catalogs all automated and manual verification procedures for the 
 | **Audio Resampling & DSP** | Unit Test | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
 | **WAV Header & Silence Gate** | Unit Test | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
 | **Transcription Queue** | Unit Test (Concurrency/Backpressure) | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
+| **Technical Vocabulary & Accuracy** | Accuracy Test (47 assertions) | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
+| **Whisper Marker Filtering** | Unit Test | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
 | **Live Mic Hardware Verification**| Manual System Test | No | Interactive Windows Desktop | ⏳ `Pending User Hardware Test` |

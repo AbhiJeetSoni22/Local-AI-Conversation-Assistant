@@ -8,6 +8,7 @@ export interface WhisperConfig {
   serverHost: string
   serverPort: number
   threads: number
+  initialPrompt?: string
 }
 
 export interface WhisperEnvValidation {
@@ -72,6 +73,10 @@ export function getWhisperConfig(overrides?: Partial<WhisperConfig>): WhisperCon
   const serverPort = overrides?.serverPort || (process.env.WHISPER_PORT ? parseInt(process.env.WHISPER_PORT, 10) : 8080)
   const threads = overrides?.threads || 4
 
+  const initialPrompt = overrides?.initialPrompt !== undefined
+    ? overrides.initialPrompt
+    : (process.env.WHISPER_INITIAL_PROMPT || '')
+
   return {
     binPath: path.resolve(binPath),
     modelPath: path.resolve(modelPath),
@@ -79,6 +84,7 @@ export function getWhisperConfig(overrides?: Partial<WhisperConfig>): WhisperCon
     serverHost,
     serverPort,
     threads,
+    initialPrompt,
   }
 }
 

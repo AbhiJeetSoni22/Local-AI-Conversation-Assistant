@@ -46,9 +46,13 @@ export default function App() {
       },
       onSegment: (segment) => {
         const clean = segment.text.trim()
-        if (clean) {
+        if (clean && !segment.isSilent) {
+          if (process.env.NODE_ENV !== 'production') {
+            console.log(`[Transcript Segment] Received: "${clean}" (silent=${segment.isSilent})`)
+          }
           setTranscript((prev) => {
             if (!prev) return clean
+            if (prev.endsWith(clean)) return prev
             return `${prev} ${clean}`
           })
         }

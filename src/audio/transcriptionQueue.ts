@@ -26,6 +26,7 @@ export interface TranscriptionQueueOptions {
     chunkIndex: number
     isFinal?: boolean
     durationMs: number
+    isSilent?: boolean
   }) => void
   /** Callback fired on transcription error */
   onError?: (error: Error) => void
@@ -135,13 +136,14 @@ export class TranscriptionQueue {
       // Verify session is still active when response returns
       if (!this.activeSessionId || chunk.sessionId === this.activeSessionId) {
         const text = result?.text ? result.text.trim() : ''
-        if (text) {
+        if (text && !result?.isSilent) {
           this.options.onSegment({
             text,
             sessionId: chunk.sessionId,
             chunkIndex: chunk.chunkIndex,
             isFinal: chunk.isFinal,
             durationMs: result.durationMs ?? 0,
+            isSilent: Boolean(result?.isSilent),
           })
         }
       }
