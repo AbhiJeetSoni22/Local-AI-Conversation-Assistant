@@ -1,7 +1,7 @@
 # Project Roadmap: Local AI Conversation Assistant
 
 **Repository:** `AbhiJeetSoni22/Local-AI-Conversation-Assistant`  
-**Current Milestone:** Phase 3 Complete  
+**Current Milestone:** Phase 4 Complete  
 **Final Submission Deadline:** November 4, 2026  
 **Status Key:**  
 - `Verified`: Code implemented, built, and validated against automated tests and criteria.  
@@ -16,14 +16,14 @@
 flowchart TD
     P1["Phase 1: Desktop Scaffold<br/>[Status: Verified]"] --> P2["Phase 2: Whisper.cpp STT Foundation<br/>[Status: Verified]"]
     P2 --> P3["Phase 3: Ollama Local LLM Integration<br/>[Status: Verified]"]
-    P3 --> P4["Phase 4: Microphone Capture & AudioWorklet<br/>[Status: Not Started]"]
-    P4 --> P5["Phase 5: End-to-End Pipeline & State Machine<br/>[Status: Not Started]"]
-    P5 --> P6["Phase 6: Hardening, Reliability & Submission<br/>[Status: Not Started]"]
+    P3 --> P4["Phase 4: Microphone Capture & Live STT<br/>[Status: Verified]"]
+    P4 --> P5["Phase 5: Context Tuning & Pipeline Polish<br/>[Status: Not Started]"]
+    P5 --> P6["Phase 6: Hardening, Packaging & Submission<br/>[Status: Not Started]"]
 
     classDef done fill:#064e3b,stroke:#059669,color:#ecfdf5;
     classDef pending fill:#1e293b,stroke:#475569,color:#94a3b8;
-    class P1,P2,P3 done;
-    class P4,P5,P6 pending;
+    class P1,P2,P3,P4 done;
+    class P5,P6 pending;
 ```
 
 ---
@@ -135,53 +135,69 @@ flowchart TD
 
 ---
 
-## Phase 4 — Microphone Audio Capture & Audio Processing
+## Phase 4 — Microphone Audio Capture & Live Transcription
 
-- **Status:** `Not Started`
-- **Goal:** Capture live microphone input in the renderer, resample to 16 kHz 16-bit PCM, and stream audio chunks to main process.
+- **Status:** `Verified (Automated) / Pending User Hardware Test`
+- **Goal:** Capture live microphone input in the renderer, resample to 16 kHz 16-bit PCM, and stream audio chunks to main process for real-time Whisper transcription.
 - **Scope:**
-  - Request browser microphone permissions cleanly via `navigator.mediaDevices.getUserMedia`.
-  - Implement `AudioWorklet` to capture raw audio samples on the audio thread.
-  - Downsample incoming audio (e.g. 44.1/48 kHz) to 16,000 Hz single-channel mono PCM.
-  - Implement audio chunker (3-to-5 second sliding audio windows or Voice Activity Detection).
-  - Send audio chunk buffers across typed IPC to Electron main.
-  - Electron main receives chunks, validates format with `wavValidator`, and feeds to `whisperService`.
-  - Handle audio device disconnection, microphone denial, and background tab suspension.
-- **Dependencies:** Web Audio API, `AudioWorkletNode`.
-- **Expected Files:**
-  - `src/audio/audioRecorder.ts`
-  - `src/audio/pcmWorklet.ts` (or worklet processor)
+  - Request browser microphone permissions cleanly via `navigator.mediaDevices.getUserMedia` with echo cancellation and noise suppression.
+  - Implement `AudioWorkletNode` with inline Blob URL (and `ScriptProcessorNode` fallback) to capture raw audio samples on the Web Audio rendering thread.
+  - Downsample incoming audio (44.1 kHz or 48 kHz) to 16,000 Hz single-channel mono PCM via linear interpolation (`src/audio/resampler.ts`).
+  - Implement audio chunker (3.0-second non-overlapping windows; 48,000 samples @ 16 kHz).
+  - Compute RMS energy and reject silent chunks (RMS < 0.005) before IPC to prevent CPU saturation.
+  - Encode 16-bit signed integer PCM RIFF/WAVE buffers with 44-byte canonical header (`src/audio/wavEncoder.ts`).
+  - Build sequential FIFO transcription queue with concurrency ceiling (<= 1), session ID invalidation, and backpressure capping (`maxQueueDepth = 3`).
+  - Wire IPC handler `whisper:transcribe-chunk` and preload bridge `transcribeAudioChunk`.
+  - Progressively append recognized speech to Live Transcript in UI with auto-scrolling.
+  - Support clean Start/Stop lifecycle with 0.5s minimum tail buffer flush on stop.
+  - Build comprehensive 22-assertion unit test suite (`scripts/test-phase4-audio.ts`).
+- **Dependencies:** Web Audio API, `whisper.cpp` engine (`whisper-cli.exe`), `ggml-base.en.bin`.
+- **Primary Files:**
+  - `src/audio/resampler.ts`
   - `src/audio/wavEncoder.ts`
-  - `electron/audioIpc.ts`
+  - `src/audio/audioRecorder.ts`
+  - `src/audio/transcriptionQueue.ts`
+  - `electron/main.ts`
+  - `electron/preload.ts`
+  - `src/App.tsx`
+  - `src/types/electron.d.ts`
+  - `scripts/test-phase4-audio.ts`
 - **Acceptance Criteria:**
   - Clicking "Start" initiates microphone recording and updates badge to `Listening`.
-  - Microphone audio is converted to valid 16 kHz 16-bit PCM buffers.
-  - Chunks stream into Whisper service without UI lag or memory leaks.
-  - Clicking "Stop" halts capture, flushes pending buffer, and transitions to `Stopped`.
+  - Microphone audio is resampled to 16 kHz 16-bit mono PCM.
+  - Silent audio chunks are detected and discarded without invoking Whisper.
+  - Chunks stream into Whisper service sequentially without concurrent process overlap.
+  - Transcribed speech is appended progressively to the Live Transcript panel.
+  - Clicking "Stop" halts capture, flushes pending buffer >= 0.5s, releases microphone tracks, and transitions to `Stopped`.
+  - All 22 automated audio DSP and queue tests pass.
+- **Validation Commands:**
+  ```bash
+  npx tsc --noEmit
+  npm run test:audio
+  npm run test:whisper
+  npm run test:ollama
+  npm run build
+  ```
 
 ---
 
-## Phase 5 — End-to-End Pipeline & Application State Handling
+## Phase 5 — Context Tuning & Pipeline Polish
 
 - **Status:** `Not Started`
-- **Goal:** Unify microphone capture, live whisper transcription, transcript accumulation, and Ollama answer suggestion into a seamless reactive workflow.
+- **Goal:** Fine-tune conversational context handling, prompt grounding, and end-to-end responsiveness between continuous Whisper speech recognition and Ollama answer suggestions.
 - **Scope:**
-  - Implement central conversation manager in main/renderer coordinating states:
-    `Idle` ➔ `Listening` ➔ `Transcribing` ➔ `Stopped` ➔ `Generating` ➔ `Completed`.
-  - Append live transcribed segments into a rolling transcript window with auto-scrolling.
-  - Deduplicate overlapping phrases from sliding audio windows.
-  - Inject accumulated conversation context into Ollama prompt template.
-  - Implement full reset / "Clear Conversation" functionality.
-  - Ensure backpressure: if Whisper is busy transcribing, queue or drop non-speech chunks rather than overloading memory.
-- **Expected Files:**
-  - `src/context/ConversationContext.tsx`
-  - `src/hooks/useConversation.ts`
-  - Updates to `src/App.tsx`, `electron/main.ts`
+  - Fine-tune prompt structure for conversation assistance based on live speech patterns.
+  - Implement rolling context buffer and intelligent transcript truncation.
+  - Expose environment re-check button when runtimes are restarted while the app is running.
+  - Verify seamless transition from live microphone speech capture directly into "Suggest Answer".
+- **Target Files:**
+  - `src/App.tsx`
+  - `electron/promptBuilder.ts`
 
 ---
 
-## Phase 6 — Hardening, Air-Gapped Verification & Final Submission
+## Phase 6 — Hardening, Packaging & Final Submission
 
 - **Status:** `Not Started`
-- **Goal:** Verify reliability on a clean Windows machine, package for distribution, and assemble submission artifacts.
+- **Goal:** Verify reliability on a clean air-gapped Windows machine, package for distribution, and assemble final submission artifacts.
 - **Target Deadline:** November 4, 2026.

@@ -1,18 +1,22 @@
 # System Architecture: Local AI Conversation Assistant
 
-This document details the architectural design, security boundaries, component responsibilities, and data flow of the **Local AI Conversation Assistant**, matching the implementation of Phase 1, Phase 2, and Phase 3.
+This document details the architectural design, security boundaries, component responsibilities, and data flow of the **Local AI Conversation Assistant**, matching the implementation of Phase 1, Phase 2, Phase 3, and Phase 4.
 
 ---
 
 ## 1. High-Level Architecture Overview
 
-The system adheres strictly to a **process-isolated, local-first architecture**. All heavy computation (speech-to-text inference and local LLM reasoning) occurs in dedicated native child processes or local daemons managed exclusively by the Electron Main Process.
+The system adheres strictly to a **process-isolated, local-first architecture**. All heavy computation (speech-to-text inference and local LLM reasoning) occurs in dedicated native child processes or local daemons managed exclusively by the Electron Main Process. Audio capture, resampling, and WAV encoding occur on the client side in the React renderer via the Web Audio API.
 
 ```mermaid
 graph TB
     subgraph UI_Renderer ["React Renderer (Chromium Web Context)"]
         UI["React UI (App.tsx)"]
-        State["UI State Model<br/>(status, whisperStatus, ollamaStatus, isGenerating)"]
+        State["UI State Model<br/>(status, whisperStatus, ollamaStatus, isGenerating, isTranscribing)"]
+        AudioRec["Audio Recorder (audioRecorder.ts)<br/>getUserMedia + AudioWorklet"]
+        Resampler["Audio Resampler & Downmixer (resampler.ts)<br/>Linear Interpolation to 16kHz Mono"]
+        WavEnc["WAV Encoder & Silence Gate (wavEncoder.ts)<br/>16-bit PCM RIFF Header + RMS"]
+        TxQueue["Transcription Queue (transcriptionQueue.ts)<br/>Sequential FIFO + Session Capping"]
         BridgeClient["window.electronApi Client"]
     end
 
@@ -40,6 +44,11 @@ graph TB
         OllamaModelStorage[("Ollama Models: qwen2.5:3b<br/>(~1.9 GB)")]
     end
 
+    UI --> AudioRec
+    AudioRec --> Resampler
+    Resampler --> WavEnc
+    WavEnc --> TxQueue
+    TxQueue --> BridgeClient
     UI --> BridgeClient
     BridgeClient <==> ContextBridge
     ContextBridge <==> IPCHandlers
@@ -109,6 +118,7 @@ The Main Process acts as the central orchestrator and privileged environment:
   - `app:get-status`: Returns application version, platform, and basic health.
   - `whisper:get-readiness`: Executes non-destructive Whisper environment validation.
   - `whisper:validate`: Re-checks executable and model paths.
+  - `whisper:transcribe-chunk`: Validates incoming PCM WAV chunk via `validateWavBuffer` and passes to `WhisperService.transcribe()`.
   - `ollama:get-readiness`: Checks Ollama daemon health (`/api/version`) and verifies target model (`/api/tags`).
   - `ollama:start-generation`: Sanitizes transcript, initiates streaming HTTP request to Ollama, and broadcasts tokens to renderer via WebContents.
   - `ollama:cancel-generation`: Aborts active HTTP stream via `AbortController`.
@@ -121,9 +131,11 @@ const electronApi = {
   getStatus: () => ipcRenderer.invoke('app:get-status'),
   platform: process.platform,
 
-  // Whisper (Phase 2)
+  // Whisper (Phase 2 & 4)
   getWhisperReadiness: () => ipcRenderer.invoke('whisper:get-readiness'),
   validateWhisper: () => ipcRenderer.invoke('whisper:validate'),
+  transcribeAudioChunk: (wavBytes: Uint8Array) =>
+    ipcRenderer.invoke('whisper:transcribe-chunk', wavBytes),
 
   // Ollama (Phase 3)
   getOllamaReadiness: () => ipcRenderer.invoke('ollama:get-readiness'),
@@ -143,15 +155,21 @@ const electronApi = {
 ### C. React Renderer Process (`src/`)
 The renderer represents the client presentation layer:
 - **`src/App.tsx`**: Main UI component containing the responsive grid layout, status indicators, action buttons, and panels.
-- **UI State Model**: Maintains execution status (`Idle`, `Listening`, `Stopped`, `Generating`), component readiness (`Checking`, `Ready`, `Unavailable`), conversation transcript, and streaming answer state.
+- **UI State Model**: Maintains execution status (`Idle`, `Listening`, `Stopped`, `Generating`), transcribing status (`isTranscribing`), component readiness (`Checking`, `Ready`, `Unavailable`), conversation transcript, and streaming answer state.
 - **User Actions**:
-  - `Start`: Transitions UI status to `Listening` (scaffold state).
-  - `Stop`: Transitions UI status to `Stopped` (scaffold state).
+  - `Start`: Requests microphone permissions, initializes `AudioRecorder`, and begins continuous 3-second audio chunking and live transcription.
+  - `Stop`: Halts audio capture, releases microphone hardware tracks, drains in-flight audio transcription queue, and transitions UI to `Stopped`.
   - `Suggest Answer`: Validates transcript and Ollama readiness, then triggers local streaming answer generation.
   - `Cancel Generation`: Aborts active Ollama inference stream mid-flight.
-  - `Load Sample Meeting Transcript`: Populates transcript with conversation text for immediate Phase 3 testing before microphone integration.
+  - `Load Sample Meeting Transcript`: Populates transcript with conversation text for immediate testing.
   - `Clear Transcript` / `Clear Answer`: Resets state.
-- **Actionable Error Rendering**: When Whisper or Ollama is unavailable, displays a highlighted guidance card instructing the user on exact manual setup commands.
+- **Actionable Error Rendering**: When Whisper, Ollama, or Microphone access is unavailable, displays a highlighted guidance card instructing the user on exact manual setup steps.
+
+### D. Audio Capture & Processing Pipeline (`src/audio/`)
+- **`audioRecorder.ts`**: Handles microphone acquisition via `navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })`. Employs an `AudioWorkletNode` (loaded dynamically via inline Blob URL) with fallback to `ScriptProcessorNode`. Accumulates samples in 3.0-second intervals (48,000 samples @ 16 kHz), and automatically flushes pending buffers >= 0.5s on stop.
+- **`resampler.ts`**: Pure DSP utilities for multi-channel downmixing (`downmixToMono`), linear interpolation with anti-aliasing low-pass filtering (`resampleTo16k`), and Root-Mean-Square energy calculation (`calculateRms`).
+- **`wavEncoder.ts`**: Encodes 16 kHz Float32 PCM arrays into standard 44-byte header 16-bit linear PCM (`pcm_s16le`) RIFF/WAVE buffers (`Uint8Array`). Evaluates RMS energy against silence threshold (`0.005`) to discard silent chunks before IPC transmission.
+- **`transcriptionQueue.ts`**: Strict FIFO sequential worker queue that prevents concurrent `whisper-cli.exe` invocations. Implements session ID validation (drops stale chunks from previous recordings) and queue depth backpressure capping (`maxQueueDepth = 3`) to prevent memory pressure when Whisper transcription duration exceeds audio window duration.
 
 ---
 
@@ -204,3 +222,61 @@ stateDiagram-v2
    - `process.once('exit', () => { ... })`
    - `process.once('SIGINT', () => { ... })`
    - `process.once('SIGTERM', () => { ... })`
+
+---
+
+## 6. Live Audio Capture & Speech-to-Text Architecture (Phase 4)
+
+The Phase 4 audio pipeline enables local, real-time speech recognition from the user's microphone:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as React UI (App.tsx)
+    participant Rec as AudioRecorder (Renderer)
+    participant Queue as TranscriptionQueue (Renderer)
+    participant Preload as Preload Bridge
+    participant Main as Electron Main Process
+    participant Whisper as whisper-cli.exe
+
+    User->>UI: Clicks "Start"
+    UI->>Rec: start(onChunk)
+    Rec->>Rec: getUserMedia({ audio: true })
+    Rec->>Rec: AudioContext + AudioWorklet (16 kHz resample)
+    Note over Rec: Accumulates 3.0s window (48,000 samples)
+
+    loop Every 3.0 Seconds of Audio
+        Rec->>Rec: encodeWav16kMono(samples)
+        alt Chunk is Silent (RMS < 0.005)
+            Note over Rec: Discard silent chunk locally
+        else Chunk contains Speech
+            Rec->>Queue: enqueue(wavBytes)
+            Queue->>UI: onStateChange(isTranscribing: true)
+            Queue->>Preload: transcribeAudioChunk(wavBytes)
+            Preload->>Main: ipcRenderer.invoke('whisper:transcribe-chunk')
+            Main->>Main: validateWavBuffer(wavBuffer)
+            Main->>Whisper: Spawn CLI & parse JSON output
+            Whisper-->>Main: Recognized text & timings
+            Main-->>Preload: TranscriptionChunkResult
+            Preload-->>Queue: Resolve chunk result
+            Queue->>UI: onChunkTranscribed(text)
+            Note over UI: Append text to Live Transcript
+        end
+    end
+
+    User->>UI: Clicks "Stop"
+    UI->>Rec: stop()
+    Rec->>Rec: Flush final chunk if >= 0.5s (8,000 samples)
+    Rec->>Rec: Release MediaStream tracks & close AudioContext
+    UI->>Queue: drain() (finish in-flight chunk)
+    Queue->>UI: onStateChange(isTranscribing: false)
+    UI->>UI: setStatus('Stopped')
+```
+
+### Audio Architecture Highlights:
+1. **Inline AudioWorklet**: AudioWorklet processor code is packaged into an inline `Blob` URL so it loads consistently across both development Vite HMR and packaged `file://` protocols, with graceful degradation to `ScriptProcessorNode` if unsupported.
+2. **Client-Side Silence Rejection**: Evaluating RMS energy in `wavEncoder.ts` prior to IPC invocation prevents spawning native processes when the user is not speaking, drastically cutting CPU overhead.
+3. **Non-Overlapping Chunks**: Audio chunks are partitioned into distinct 3.0-second non-overlapping windows to avoid duplicate words in the live transcript.
+4. **Sequential Processing & Backpressure**: `TranscriptionQueue` processes one chunk at a time, enforcing an absolute ceiling (`maxQueueDepth = 3`). If Whisper inference takes longer than real-time on lower-power CPUs, older pending chunks are safely dropped to prevent latency accumulation and memory growth.
+5. **Session Isolation**: Each recording cycle is assigned a unique `sessionId`. When the user clicks "Stop" and "Start" again, all queued chunks from superseded sessions are rejected immediately without executing Whisper.

@@ -94,9 +94,60 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
-## 3. Audio & WAV Validation Errors
+## 3. Microphone & Live Audio Capture Issues (Phase 4)
 
-### Issue 3.1: `Invalid WAV header: expected "RIFF", found ...`
+### Issue 3.1: "Microphone access was denied: NotAllowedError"
+- **Symptom:** Clicking "Start" produces an alert banner: `Microphone access was denied. Please allow microphone permissions in Windows Settings (Privacy & security > Microphone).`
+- **Root Cause:** Either the user denied the permission prompt in Electron, or Windows OS privacy settings block desktop apps from accessing the microphone.
+- **Solution:**
+  1. Open Windows **Settings** (`Win + I`).
+  2. Go to **Privacy & security > Microphone**.
+  3. Ensure **Microphone access** is turned **On**.
+  4. Ensure **Let desktop apps access your microphone** is turned **On**.
+  5. Restart the application (`npm run dev`) and click "Start" again.
+
+---
+
+### Issue 3.2: "No microphone device detected: NotFoundError"
+- **Symptom:** Clicking "Start" produces an alert: `No microphone device detected. Please connect a microphone and try again.`
+- **Root Cause:** No active audio input device is detected by the operating system or browser environment.
+- **Solution:**
+  1. Check your physical microphone or headset connection (USB or 3.5mm jack).
+  2. Open Windows **Sound Settings** and verify that an active input device is selected and responding to test speech.
+  3. If using a Bluetooth headset, ensure it is connected and not exclusively locked in hands-free mode by another app.
+
+---
+
+### Issue 3.3: "Microphone is busy or unreadable: NotReadableError"
+- **Symptom:** Clicking "Start" produces: `Microphone is currently unavailable or in use by another application.`
+- **Root Cause:** Another Windows application (such as Microsoft Teams, Zoom, or Discord) has opened the microphone in exclusive mode.
+- **Solution:**
+  1. Close competing voice or video calling software.
+  2. Go to Windows **Sound Control Panel > Recording > [Your Mic] > Properties > Advanced**, and uncheck **"Allow applications to take exclusive control of this device"**.
+
+---
+
+### Issue 3.4: Live Transcript doesn't show text when quiet
+- **Symptom:** The user clicks "Start", the emerald "Listening" badge is visible, but no transcript is added.
+- **Root Cause:** Silence detection gate (`calculateRms(samples) < 0.005`) deliberately filters out silent ambient background noise so `whisper.cpp` is not invoked unnecessarily.
+- **Solution:**
+  Speak clearly into your microphone at normal conversational volume. The "Transcribing audio..." indicator will appear within 3 seconds, followed by the transcribed phrase in the Live Transcript panel.
+
+---
+
+### Issue 3.5: "Dropped audio chunk due to transcription backpressure"
+- **Symptom:** Console logs show `Dropped audio chunk due to transcription backpressure (queue depth: 3)`.
+- **Root Cause:** On lower-power CPUs, `whisper.cpp` single-chunk transcription duration might exceed the audio chunk window (3.0 seconds). If Whisper takes > 3.0s per chunk, the queue limits backlog to 3 pending chunks to protect system memory and prevent UI lagging.
+- **Solution:**
+  1. Check CPU load in Windows Task Manager.
+  2. Verify that `WHISPER_THREADS` is set to an appropriate number for your CPU core count (default is 4).
+  3. Ensure other heavy CPU applications are closed.
+
+---
+
+## 4. Audio & WAV Validation Errors
+
+### Issue 4.1: `Invalid WAV header: expected "RIFF", found ...`
 - **Symptom:** `transcribe()` or `validateWavBuffer()` rejects audio with header error.
 - **Root Cause:** The provided audio file is not an uncompressed RIFF/WAVE file (e.g., MP3, AAC, FLAC).
 - **Solution:**
@@ -107,7 +158,7 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
-### Issue 3.2: `Unsupported audio encoding: format code 3 (expected 1)`
+### Issue 4.2: `Unsupported audio encoding: format code 3 (expected 1)`
 - **Symptom:** The validator rejects the audio with format code 3.
 - **Root Cause:** Format code `3` indicates 32-bit IEEE floating-point PCM. `whisper.cpp` requires 16-bit signed integer linear PCM (format code `1`).
 - **Solution:**
@@ -115,9 +166,9 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
-## 4. Electron & Development Environment Issues
+## 5. Electron & Development Environment Issues
 
-### Issue 4.1: `ELECTRON_RUN_AS_NODE` Environment Conflict
+### Issue 5.1: `ELECTRON_RUN_AS_NODE` Environment Conflict
 - **Symptom:** Running `electron .` or smoke launch produces:
   `TypeError: Cannot read properties of undefined (reading 'handle')` or runs as pure Node.
 - **Root Cause:** When running from certain terminals or IDEs, the parent process injects `ELECTRON_RUN_AS_NODE=1`.
@@ -130,7 +181,7 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
-### Issue 4.2: Port 5173 In Use During Development
+### Issue 5.2: Port 5173 In Use During Development
 - **Symptom:** Vite outputs `Port 5173 is in use, trying another one...` and Electron loads a blank screen.
 - **Root Cause:** A previous `npm run dev` session was terminated abruptly without killing the Vite background process.
 - **Solution:**
@@ -141,7 +192,7 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
-## 5. Checking for Orphaned Processes
+## 6. Checking for Orphaned Processes
 
 The application automatically hooks into `before-quit`, `will-quit`, and `exit` events to kill child processes. If an unexpected crash occurs during development, verify that no lingering processes remain:
 

@@ -7,9 +7,15 @@ const electronApi = {
   getStatus: () => ipcRenderer.invoke('app:get-status'),
   platform: process.platform,
 
-  // Whisper (Phase 2)
+  // Whisper (Phase 2 & Phase 4)
   getWhisperReadiness: () => ipcRenderer.invoke('whisper:get-readiness'),
   validateWhisper: () => ipcRenderer.invoke('whisper:validate'),
+  transcribeAudioChunk: (data: {
+    audioBuffer: Uint8Array | ArrayBuffer
+    sessionId: string
+    chunkIndex: number
+    isFinal?: boolean
+  }) => ipcRenderer.invoke('whisper:transcribe-chunk', data),
 
   // Ollama (Phase 3)
   getOllamaReadiness: () => ipcRenderer.invoke('ollama:get-readiness'),

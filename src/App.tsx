@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { WhisperReadiness, OllamaReadiness } from './types/electron'
+import { AudioRecorder } from './audio/audioRecorder'
+import { TranscriptionQueue } from './audio/transcriptionQueue'
 
 type AppStatus = 'Idle' | 'Listening' | 'Stopped' | 'Generating'
 type ComponentStatus = 'Checking' | 'Ready' | 'Unavailable'
@@ -24,13 +26,44 @@ export default function App() {
   const [transcript, setTranscript] = useState<string>('')
   const [suggestedAnswer, setSuggestedAnswer] = useState<string | null>(null)
   const [isGenerating, setIsGenerating] = useState<boolean>(false)
+  const [isTranscribing, setIsTranscribing] = useState<boolean>(false)
   const [streamMeta, setStreamMeta] = useState<{ durationMs?: number; model?: string; isCancelled?: boolean } | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
   const [copied, setCopied] = useState<boolean>(false)
 
+  // Phase 4 Audio Recorder and Queue References
+  const audioRecorderRef = useRef<AudioRecorder | null>(null)
+  const transcriptionQueueRef = useRef<TranscriptionQueue | null>(null)
+
   useEffect(() => {
+    // 1. Initialize Transcription Queue
+    const queue = new TranscriptionQueue({
+      transcribeChunk: async (chunk) => {
+        if (!window.electronApi) {
+          throw new Error('Electron API is unavailable in this environment.')
+        }
+        return await window.electronApi.transcribeAudioChunk(chunk)
+      },
+      onSegment: (segment) => {
+        const clean = segment.text.trim()
+        if (clean) {
+          setTranscript((prev) => {
+            if (!prev) return clean
+            return `${prev} ${clean}`
+          })
+        }
+      },
+      onStatusChange: (qStatus) => {
+        setIsTranscribing(qStatus.isProcessing)
+      },
+      onError: (err) => {
+        setValidationError(`Transcription error: ${err.message}`)
+      },
+    })
+    transcriptionQueueRef.current = queue
+
     if (window.electronApi) {
-      // 1. Fetch app status
+      // 2. Fetch app status
       window.electronApi.getStatus()
         .then((info) => {
           setSystemInfo(`${info.platform} (v${info.version}) • Electron IPC Active`)
@@ -39,7 +72,7 @@ export default function App() {
           setSystemInfo('Electron IPC available')
         })
 
-      // 2. Fetch Whisper readiness
+      // 3. Fetch Whisper readiness
       window.electronApi.getWhisperReadiness()
         .then((readiness) => {
           setWhisperInfo(readiness)
@@ -59,7 +92,7 @@ export default function App() {
           })
         })
 
-      // 3. Fetch Ollama readiness
+      // 4. Fetch Ollama readiness
       window.electronApi.getOllamaReadiness()
         .then((readiness) => {
           setOllamaInfo(readiness)
@@ -79,7 +112,7 @@ export default function App() {
           })
         })
 
-      // 4. Register Ollama streaming listeners
+      // 5. Register Ollama streaming listeners
       const unsubscribeChunk = window.electronApi.onOllamaChunk((data) => {
         setSuggestedAnswer((prev) => (prev ? prev + data.chunk : data.chunk))
       })
@@ -111,21 +144,67 @@ export default function App() {
         unsubscribeDone()
         unsubscribeCancelled()
         unsubscribeError()
+        if (audioRecorderRef.current) {
+          audioRecorderRef.current.stop().catch(() => {})
+        }
+        queue.clear()
       }
     } else {
       setSystemInfo('Web preview mode')
       setWhisperStatus('Unavailable')
       setOllamaStatus('Unavailable')
+      return () => {
+        if (audioRecorderRef.current) {
+          audioRecorderRef.current.stop().catch(() => {})
+        }
+        queue.clear()
+      }
     }
   }, [])
 
-  const handleStart = () => {
-    // Scaffold UI state transition (Phase 4 will attach live microphone streaming)
-    setStatus('Listening')
+  const handleStart = async () => {
+    setValidationError(null)
+
+    // Validation: Whisper must be ready
+    if (whisperStatus !== 'Ready') {
+      setValidationError(
+        whisperInfo?.error || 'Whisper speech recognition is unavailable. Place whisper-cli.exe in bin/ and ggml-base.en.bin in models/.'
+      )
+      return
+    }
+
+    try {
+      const recorder = new AudioRecorder({
+        chunkDurationSec: 3.0,
+        minFinalChunkDurationSec: 0.5,
+        onChunk: (chunk) => {
+          transcriptionQueueRef.current?.enqueue(chunk)
+        },
+        onError: (err) => {
+          setValidationError(err.message)
+          setStatus('Stopped')
+        },
+      })
+      audioRecorderRef.current = recorder
+
+      const sessionId = await recorder.start()
+      transcriptionQueueRef.current?.setActiveSession(sessionId)
+      setStatus('Listening')
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setValidationError(message)
+      setStatus('Stopped')
+    }
   }
 
-  const handleStop = () => {
-    // Scaffold UI state transition
+  const handleStop = async () => {
+    if (audioRecorderRef.current && audioRecorderRef.current.getIsRecording()) {
+      try {
+        await audioRecorderRef.current.stop()
+      } catch (err: unknown) {
+        console.error('Error stopping audio recorder:', err)
+      }
+    }
     setStatus('Stopped')
   }
 
@@ -134,7 +213,7 @@ export default function App() {
 
     // Validation 1: Transcript must exist
     if (!transcript.trim()) {
-      setValidationError('Cannot suggest answer: Conversation transcript is empty. Load or record a transcript first.')
+      setValidationError('Cannot suggest answer: Conversation transcript is empty. Record speech or load a sample first.')
       return
     }
 
@@ -245,7 +324,7 @@ export default function App() {
             {/* Whisper Status Indicator */}
             <div
               className={`telemetry-item ${whisperStatus.toLowerCase()}`}
-              title={whisperInfo?.error || (whisperStatus === 'Ready' ? `whisper.cpp ${whisperInfo?.engine.toUpperCase()} ready (${whisperInfo?.modelPath})` : 'Whisper speech-to-text')}
+              title={whisperInfo?.error || (whisperStatus === 'Ready' ? `whisper.cpp ${whisperInfo?.engine.toUpperCase()} ready` : 'Whisper speech-to-text')}
             >
               <span className={`status-dot ${whisperStatus.toLowerCase()}`}></span>
               <span className="telemetry-name">Whisper</span>
@@ -288,7 +367,7 @@ export default function App() {
             className="btn btn-primary"
             onClick={handleStart}
             disabled={status === 'Listening' || isGenerating}
-            title="Start listening session (scaffold state)"
+            title="Start capturing microphone audio and transcribing locally"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
@@ -304,8 +383,8 @@ export default function App() {
             id="btn-stop"
             className="btn btn-stop"
             onClick={handleStop}
-            disabled={status === 'Idle' || status === 'Stopped' || isGenerating}
-            title="Stop listening session"
+            disabled={status !== 'Listening' || isGenerating}
+            title="Stop recording and flush final audio chunk"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -320,13 +399,15 @@ export default function App() {
             id="btn-suggest"
             className="btn btn-suggest"
             onClick={handleSuggestAnswer}
-            disabled={isGenerating || ollamaStatus !== 'Ready' || !transcript.trim()}
+            disabled={isGenerating || status === 'Listening' || ollamaStatus !== 'Ready' || !transcript.trim()}
             title={
-              ollamaStatus !== 'Ready'
-                ? 'Ollama is offline or model is missing.'
-                : !transcript.trim()
-                  ? 'Add or record a conversation transcript first.'
-                  : 'Synthesize suggested answer locally from transcript'
+              status === 'Listening'
+                ? 'Stop recording before generating an answer.'
+                : ollamaStatus !== 'Ready'
+                  ? 'Ollama is offline or model is missing.'
+                  : !transcript.trim()
+                    ? 'Record speech or load a transcript first.'
+                    : 'Synthesize suggested answer locally from transcript'
             }
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -355,7 +436,9 @@ export default function App() {
         {/* Context Hint */}
         <div className="action-hint">
           {status === 'Listening' ? (
-            <span className="hint-active">Listening active • Speech-to-text pipeline</span>
+            <span className="hint-active">
+              {isTranscribing ? 'Transcribing speech chunk...' : 'Listening... speak into microphone'}
+            </span>
           ) : isGenerating ? (
             <span className="hint-generating">Streaming answer locally via {ollamaInfo?.model || 'qwen2.5:3b'}</span>
           ) : (
@@ -389,11 +472,11 @@ export default function App() {
             <div className="panel-header-title">
               <h2 id="heading-transcript" className="panel-title">Conversation Transcript</h2>
               <span className="panel-badge">
-                {whisperStatus === 'Ready' ? 'whisper.cpp' : 'whisper'}
+                {status === 'Listening' ? (isTranscribing ? 'Transcribing...' : 'Live') : 'whisper.cpp'}
               </span>
             </div>
             <div className="panel-header-actions">
-              {transcript && (
+              {transcript && status !== 'Listening' && (
                 <button
                   className="btn-text-ghost"
                   onClick={handleClearTranscript}
@@ -430,6 +513,12 @@ export default function App() {
             {transcript ? (
               <div className="transcript-canvas">
                 {renderFormattedTranscript(transcript)}
+                {status === 'Listening' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94a3b8', fontSize: '12px', marginTop: '8px' }}>
+                    <span className="status-dot listening" style={{ width: 6, height: 6 }}></span>
+                    <span>{isTranscribing ? 'Transcribing audio chunk...' : 'Listening for speech...'}</span>
+                  </div>
+                )}
               </div>
             ) : status === 'Listening' ? (
               <div className="state-empty listening">
@@ -441,22 +530,10 @@ export default function App() {
                     <line x1="8" y1="23" x2="16" y2="23" />
                   </svg>
                 </div>
-                <h3 className="empty-title">Recording in Progress</h3>
+                <h3 className="empty-title">Recording Active</h3>
                 <p className="empty-desc">
-                  Speech recognition foundation is active. Real-time audio streaming from microphone will connect in Phase 4.
+                  {isTranscribing ? 'Processing audio chunk with whisper.cpp...' : 'Speak into your microphone. Transcribed speech will appear here.'}
                 </p>
-                <div className="empty-action">
-                  <button className="btn-utility" onClick={handleLoadSampleTranscript}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                      <polyline points="14 2 14 8 20 8" />
-                      <line x1="16" y1="13" x2="8" y2="13" />
-                      <line x1="16" y1="17" x2="8" y2="17" />
-                      <polyline points="10 9 9 9 8 9" />
-                    </svg>
-                    <span>Load sample transcript for testing</span>
-                  </button>
-                </div>
               </div>
             ) : (
               <div className="state-empty">
@@ -467,7 +544,7 @@ export default function App() {
                 </div>
                 <h3 className="empty-title">No Conversation Recorded</h3>
                 <p className="empty-desc">
-                  Live meeting conversation will appear here once audio is captured. To test answer generation right now:
+                  Click <strong>Start</strong> to begin live microphone transcription, or load a sample transcript to test answer generation immediately:
                 </p>
                 <div className="empty-action">
                   <button className="btn-utility" onClick={handleLoadSampleTranscript}>
@@ -594,7 +671,7 @@ export default function App() {
                 </div>
                 <h3 className="empty-title">Ready for Questions</h3>
                 <p className="empty-desc">
-                  When a conversation transcript is loaded, click <strong>Suggest Answer</strong> to synthesize talking points and answers with on-device AI.
+                  When a conversation transcript is recorded or loaded, click <strong>Suggest Answer</strong> to synthesize talking points and answers with on-device AI.
                 </p>
               </div>
             )}

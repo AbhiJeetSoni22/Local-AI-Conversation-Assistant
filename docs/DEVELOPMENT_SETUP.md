@@ -124,7 +124,18 @@ curl http://127.0.0.1:11434/api/version
 
 ---
 
-## 5. Verification Commands
+## 5. Microphone & Audio Setup (Phase 4 Requirement)
+
+In Phase 4, the assistant captures real audio from your system's default recording device (microphone). Ensure your Windows operating system permits microphone access for desktop applications:
+
+1. **Open Windows Settings:** Press `Win + I` and navigate to **Privacy & security > Microphone**.
+2. **Enable Microphone Access:** Ensure **Microphone access** is toggled **On**.
+3. **Allow Desktop Apps:** Ensure **Let desktop apps access your microphone** is toggled **On**.
+4. **Default Recording Device:** Right-click the speaker icon in your Windows taskbar, open **Sound settings**, and ensure your active physical microphone (or headset) is selected as the default **Input** device and registers audio input when speaking.
+
+---
+
+## 6. Verification Commands
 
 Run the full verification suite before starting the desktop application:
 
@@ -154,9 +165,16 @@ npm run validate:ollama
 ```
 *Expected result:* `Test Results: 36/36 passed (0 failed)`.
 
+### 4. Run Audio Capture & Pipeline Suite (Phase 4)
+```powershell
+# Comprehensive 22-assertion audio DSP, WAV encoding, and queue test suite
+npm run test:audio
+```
+*Expected result:* `Test Results: 22/22 passed (0 failed)`.
+
 ---
 
-## 6. Running the Application
+## 7. Running the Application
 
 ### Development Mode (with Hot Module Replacement):
 Starts the Vite dev server and spawns the Electron desktop window:
@@ -173,8 +191,8 @@ npx electron .
 
 ---
 
-## 7. What Setup Steps Belong to Later Phases?
+## 8. What Setup Steps Belong to Later Phases?
 
 To maintain clear project discipline, do **NOT** implement the following yet:
-- **Audio Capture Permissions / Virtual Audio Cables / AudioWorklet:** Scheduled for **Phase 4**.
-- **Packaging / Installer Setup:** Scheduled for **Phase 6**.
+- **Prompt Engineering & Context Truncation Tuning:** Scheduled for **Phase 5**.
+- **Packaging / Installer Setup (`electron-builder`):** Scheduled for **Phase 6**.

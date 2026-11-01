@@ -69,13 +69,60 @@ ipcMain.handle('app:get-status', async () => {
   }
 })
 
-// Phase 2 Whisper IPC handlers: typed readiness and environment validation
+// Phase 2 & 4 Whisper IPC handlers: typed readiness, validation, and chunk transcription
 ipcMain.handle('whisper:get-readiness', async () => {
   return await whisperService.getReadiness()
 })
 
 ipcMain.handle('whisper:validate', async () => {
   return await whisperService.getReadiness()
+})
+
+ipcMain.handle('whisper:transcribe-chunk', async (_event, payload: {
+  audioBuffer: Uint8Array | ArrayBuffer
+  sessionId: string
+  chunkIndex: number
+  isFinal?: boolean
+}) => {
+  const { audioBuffer, sessionId, chunkIndex, isFinal } = payload || {}
+
+  if (!audioBuffer) {
+    return {
+      text: '',
+      durationMs: 0,
+      isSilent: true,
+      sessionId: sessionId || '',
+      chunkIndex: chunkIndex ?? 0,
+      isFinal: Boolean(isFinal),
+      error: 'Audio buffer is missing or empty.',
+    }
+  }
+
+  try {
+    const buffer = Buffer.isBuffer(audioBuffer)
+      ? audioBuffer
+      : Buffer.from(audioBuffer as ArrayBuffer)
+
+    const result = await whisperService.transcribe(buffer)
+    return {
+      text: result.text.trim(),
+      durationMs: result.durationMs,
+      isSilent: Boolean(result.isSilent),
+      sessionId,
+      chunkIndex,
+      isFinal: Boolean(isFinal),
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      text: '',
+      durationMs: 0,
+      sessionId,
+      chunkIndex,
+      isFinal: Boolean(isFinal),
+      error: message,
+    }
+  }
 })
 
 // Phase 3 Ollama IPC handlers: readiness, streaming generation, and cancellation

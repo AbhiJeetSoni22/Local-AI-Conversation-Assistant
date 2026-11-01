@@ -19,15 +19,15 @@ A desktop conversational assistant built with **Electron**, **React**, **TypeScr
 | **Phase 1** | Electron + React + TypeScript Desktop Scaffold | ✅ `Verified` | Desktop window initializes cleanly under `TEST_LAUNCH=1`. |
 | **Phase 2** | Whisper.cpp Local Speech-to-Text Foundation | ✅ `Verified` | Offline JFK transcription in 3.67s; 18/18 edge-case tests pass. |
 | **Phase 3** | Ollama Local LLM & Streaming Suggestions | ✅ `Verified` | Local Ollama streaming answers, cancel support; 36/36 tests pass. |
-| **Phase 4** | Microphone Audio Capture & AudioWorklet | ⏳ `Not Started` | UI controls currently demonstrate scaffold states. |
-| **Phase 5** | End-to-End Orchestration & Pipeline | ⏳ `Not Started` | Full reactive loop integration. |
+| **Phase 4** | Microphone Audio Capture & Live Transcription | ✅ `Verified (Automated)` | Resampling, WAV encoding, queueing, and Whisper IPC; 22/22 tests pass. |
+| **Phase 5** | Context Tuning & Pipeline Polish | ⏳ `Not Started` | Fine-tuning conversation context & suggestion quality. |
 | **Phase 6** | Hardening, Air-Gapped Verification & Submission | ⏳ `Not Started` | Final submission deadline: November 4, 2026. |
 
-> ⚠️ **Strict Boundary Notice:**
-> - **Phases 1, 2, and 3 are complete and verified.**
-> - Microphone live recording and streaming belong strictly to **Phase 4**.
-> - The Start/Stop buttons currently demonstrate UI scaffold state transitions only.
-> - To test the Phase 3 "Suggest Answer" streaming workflow immediately, use the built-in **"Load Sample Meeting Transcript"** button in the Live Transcript panel.
+> ℹ️ **Current Status Note:**
+> - **Phases 1, 2, 3, and 4 are complete and automated-tested.**
+> - Clicking **Start** initiates real microphone capture, audio downsampling to 16 kHz mono, client-side silence filtering, and sequential local Whisper.cpp transcription.
+> - Clicking **Stop** halts capture, flushes any final audio buffer >= 0.5s, releases microphone hardware, and drains the transcription queue.
+> - The live transcript can immediately feed into the **Suggest Answer** button to stream local answers from Ollama (`qwen2.5:3b`).
 
 ---
 
@@ -103,7 +103,10 @@ npm run test:ollama
 # 4. Probe live local Ollama runtime and run test stream
 npm run validate:ollama
 
-# 5. Compile production bundles
+# 5. Run Audio Capture & Live Pipeline test suite (22 assertions)
+npm run test:audio
+
+# 6. Compile production bundles
 npm run build
 ```
 

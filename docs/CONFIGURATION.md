@@ -26,7 +26,7 @@ The application relies on predictable, project-level relative path resolution. T
 
 The application can be configured at runtime via standard Windows environment variables. All variables are optional and provide sensible defaults:
 
-### Whisper Configuration (Phase 2)
+### Whisper Configuration (Phase 2 & Phase 4)
 | Variable | Type | Default | Description |
 | :--- | :---: | :---: | :--- |
 | **`WHISPER_BIN_PATH`** *(or `WHISPER_PATH`)* | String | `./bin/whisper-cli.exe` | Absolute or relative path to the Whisper executable. |
@@ -49,22 +49,24 @@ The application can be configured at runtime via standard Windows environment va
 | **`APP_ROOT`** | String | `process.cwd()` | Explicit project root directory override for bundled desktop distributions. |
 | **`VITE_DEV_SERVER_URL`** | String | *(auto)* | Injected automatically by Vite during `npm run dev` to point Electron to the local development server. |
 
-### Setting Environment Variables in Windows PowerShell:
-```powershell
-# Custom model or Ollama host override:
-$env:OLLAMA_HOST = "http://127.0.0.1:11434"
-$env:OLLAMA_MODEL = "qwen2.5:3b"
+---
 
-# Whisper overrides:
-$env:WHISPER_MODEL_PATH = "D:\AI_Models\ggml-base.en.bin"
+## 3. Audio Capture & Chunking Parameters (Phase 4)
 
-# Launch application with overrides:
-npm run dev
-```
+These parameters govern the renderer microphone capture and chunking pipeline:
+
+| Parameter | Value | Component | Description |
+| :--- | :---: | :--- | :--- |
+| **Microphone Channel Count** | `1` (Mono) | `AudioRecorder` | Audio constraints request single-channel mono with echo cancellation, noise suppression, and auto gain control. |
+| **Internal Target Sample Rate** | `16,000 Hz` | `resampler.ts` | All incoming hardware audio (44.1kHz, 48kHz, etc.) is resampled to 16kHz via anti-aliasing linear interpolation. |
+| **Target Chunk Duration** | `3.0 seconds` | `AudioRecorder` | Exactly 48,000 samples @ 16kHz. Yields optimal balance between latency and transcription accuracy. |
+| **Minimum Final Chunk Duration**| `0.5 seconds` | `AudioRecorder` | Exactly 8,000 samples @ 16kHz. When the user clicks Stop, partial audio shorter than 0.5s is discarded to prevent incomplete word artifacts. |
+| **Silence Gating Threshold** | `0.005` RMS | `AudioRecorder` / `wavEncoder` | Buffers with RMS energy below 0.005 are flagged as silent and bypass `whisper-cli.exe` execution. |
+| **Maximum Queue Backpressure** | `3 chunks` | `TranscriptionQueue` | Limits pending transcription backlog to 3 items. If CPU is under heavy load, drops excess unstarted chunks to prevent memory bloat. |
 
 ---
 
-## 3. Audio & WAV Validation Rules (`electron/wavValidator.ts`)
+## 4. Audio & WAV Validation Rules (`electron/wavValidator.ts`)
 
 To ensure stability and protect whisper.cpp from corrupted or malicious inputs, all audio submitted to the transcription engine must satisfy these strict constraints:
 
@@ -81,7 +83,7 @@ To ensure stability and protect whisper.cpp from corrupted or malicious inputs, 
 
 ---
 
-## 4. Prompt Builder Rules & Parameters (`electron/promptBuilder.ts`)
+## 5. Prompt Builder Rules & Parameters (`electron/promptBuilder.ts`)
 
 The prompt builder sanitizes untrusted conversation transcripts before passing them to the local Ollama LLM:
 
@@ -94,7 +96,7 @@ The prompt builder sanitizes untrusted conversation transcripts before passing t
 
 ---
 
-## 5. Build & Tooling Configurations
+## 6. Build & Tooling Configurations
 
 ### A. TypeScript (`tsconfig.json`)
 Configured in strict mode to ensure zero type coercion or unintended `any` types:
@@ -121,6 +123,7 @@ Configured with `vite-plugin-electron/simple` for seamless HMR across both React
   "validate:whisper": "tsx scripts/validate-whisper.ts",
   "test:whisper": "tsx scripts/test-whisper-failures.ts",
   "validate:ollama": "tsx scripts/validate-ollama.ts",
-  "test:ollama": "tsx scripts/test-ollama.ts"
+  "test:ollama": "tsx scripts/test-ollama.ts",
+  "test:audio": "tsx scripts/test-phase4-audio.ts"
 }
 ```

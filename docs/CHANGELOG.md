@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Phase 4: Microphone Audio Capture & Live Transcription] - 2026-11-01
+
+### Added
+- **Audio Capture & AudioWorklet Engine (`src/audio/audioRecorder.ts`)**:
+  - Implemented `AudioRecorder` using `navigator.mediaDevices.getUserMedia` with mono channel, echo cancellation, noise suppression, and auto gain control constraints.
+  - Packaged inline `AudioWorkletNode` via dynamic Blob URL ensuring reliable loading across both Vite dev server and packaged `file://` protocols, with automatic fallback to `ScriptProcessorNode`.
+  - Configured 3.0-second non-overlapping chunk window (`48,000` samples @ 16 kHz).
+  - Added clean teardown flushing pending speech buffer >= 0.5s (`8,000` samples), stopping media tracks, and closing `AudioContext`.
+  - Built comprehensive error classification for `NotAllowedError`, `NotFoundError`, and `NotReadableError` with user-friendly messages.
+- **Audio Resampling & DSP (`src/audio/resampler.ts`)**:
+  - Pure function `resampleTo16k()` with linear interpolation and anti-aliasing low-pass filtering from 48 kHz, 44.1 kHz, or arbitrary input sample rates to standard 16,000 Hz.
+  - Multi-channel downmixing via `downmixToMono()`.
+  - Root-Mean-Square (RMS) amplitude energy calculation via `calculateRms()`.
+- **WAV Encoding & Silence Gating (`src/audio/wavEncoder.ts`)**:
+  - Encodes 16 kHz Float32 PCM arrays into canonical 44-byte header 16-bit linear PCM (`pcm_s16le`) RIFF/WAVE buffers (`Uint8Array`).
+  - Implemented client-side silence gate evaluating RMS energy against threshold `0.005`, discarding ambient room noise before IPC transit to prevent CPU saturation.
+- **Sequential Transcription Queue & Backpressure (`src/audio/transcriptionQueue.ts`)**:
+  - FIFO worker queue guaranteeing sequential Whisper execution (concurrency <= 1), preventing overlapping CLI process launches and out-of-order text.
+  - Monotonic `sessionId` validation automatically invalidating and dropping stale chunks from previous recording sessions.
+  - Backpressure capping (`maxQueueDepth = 3`) dropping older queued chunks if Whisper execution latency exceeds real-time audio window on slower CPUs.
+  - Clean `drain()` method ensuring in-flight chunk completes when user clicks "Stop".
+- **IPC Chunk Transcription Bridge (`electron/main.ts`, `electron/preload.ts`, `src/types/electron.d.ts`)**:
+  - Registered IPC handler `whisper:transcribe-chunk` accepting raw WAV `Uint8Array`, converting to Node Buffer, validating via `validateWavBuffer`, and transcribing via `WhisperService.transcribe()`.
+  - Exposed `transcribeAudioChunk` method on `window.electronApi` in preload bridge.
+  - Defined typed `TranscriptionChunkResult` contract.
+- **Interactive UI Integration (`src/App.tsx`, `src/index.css`)**:
+  - Connected `Start` button to initialize `AudioRecorder` and `TranscriptionQueue`.
+  - Connected `Stop` button to cleanly stop recording, flush final buffer, and drain pending queue.
+  - Real-time appending of transcribed speech to Live Transcript panel with automatic scroll-to-bottom.
+  - Added "Transcribing audio..." visual status spinner when Whisper is actively processing.
+  - Added graceful unmount cleanup disposing active audio recorder and queue on window unload.
+- **Automated Audio Test Suite (`scripts/test-phase4-audio.ts`)**:
+  - Built 22-assertion unit and integration test suite covering resampler, downmixer, RMS energy, WAV header structure, main wavValidator compatibility, sequential queue concurrency, session invalidation, and backpressure.
+  - Added `"test:audio": "tsx scripts/test-phase4-audio.ts"` script in `package.json`.
+
+---
+
 ## [UI Polish: Premium Dark Desktop Redesign] - 2026-10-31
 
 ### Changed

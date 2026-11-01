@@ -27,14 +27,30 @@ export interface OllamaReadiness {
   error?: string
 }
 
+export interface TranscriptionChunkResult {
+  text: string
+  durationMs: number
+  isSilent?: boolean
+  sessionId: string
+  chunkIndex: number
+  isFinal?: boolean
+  error?: string
+}
+
 export interface ElectronApi {
   // App
   getStatus: () => Promise<AppStatus>
   platform: string
 
-  // Whisper
+  // Whisper (Phase 2 & Phase 4)
   getWhisperReadiness: () => Promise<WhisperReadiness>
   validateWhisper: () => Promise<WhisperReadiness>
+  transcribeAudioChunk: (data: {
+    audioBuffer: Uint8Array | ArrayBuffer
+    sessionId: string
+    chunkIndex: number
+    isFinal?: boolean
+  }) => Promise<TranscriptionChunkResult>
 
   // Ollama
   getOllamaReadiness: () => Promise<OllamaReadiness>

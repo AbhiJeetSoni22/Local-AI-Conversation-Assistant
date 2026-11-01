@@ -223,6 +223,57 @@ This document catalogs all automated and manual verification procedures for the 
 
 ---
 
+### Test 1.7: Audio Processing & Live Pipeline Suite (Phase 4)
+- **Purpose:** Executes 22 unit and integration assertions covering audio sample rate resampling (48 kHz to 16 kHz, 44.1 kHz to 16 kHz, identity 16 kHz), channel downmixing, RMS silence calculation, WAV encoding fidelity against `electron/wavValidator.ts`, sequential transcription queue concurrency serialization, session ID cancellation, and backpressure capping.
+- **Command:**
+  ```powershell
+  npm run test:audio
+  ```
+- **Expected Result:** All 22 assertions pass with 0 failures; exit code 0.
+- **Actual Result (Executed Nov 1, 2026):**
+  ```text
+  =====================================================
+     Audio Pipeline & Transcription Queue Test Suite
+  =====================================================
+
+  [Group 1/4] Resampler & Downmixer
+    ✅ PASS: Downmixes stereo to mono
+    ✅ PASS: Preserves mono channel
+    ✅ PASS: Resamples 48kHz to 16kHz
+    ✅ PASS: Resamples 44.1kHz to 16kHz
+    ✅ PASS: Identity resampling preserves length
+    ✅ PASS: Identity resampling preserves exact samples
+    ✅ PASS: Resampling handles zero-length input
+
+  [Group 2/4] RMS Energy & Silence Gate
+    ✅ PASS: Pure silence yields 0 RMS
+    ✅ PASS: DC offset has correct RMS
+    ✅ PASS: Sine wave has expected RMS (~0.707)
+    ✅ PASS: Empty array has 0 RMS
+
+  [Group 3/4] WAV Encoder & Header Validation
+    ✅ PASS: Output is Uint8Array
+    ✅ PASS: Output size matches 44-byte header + data
+    ✅ PASS: Encoder flags quiet buffer as silent
+    ✅ PASS: Encoder flags active buffer as non-silent
+    ✅ PASS: Generated WAV passes main wavValidator
+    ✅ PASS: Generated WAV duration matches sample count
+
+  [Group 4/4] Transcription Queue & Concurrency
+    ✅ PASS: Enqueues and transcribes sequentially
+    ✅ PASS: Queue concurrency is always <= 1
+    ✅ PASS: Inactive/superseded session chunks are ignored
+    ✅ PASS: Backpressure drops chunks when depth > maxQueueDepth
+    ✅ PASS: Queue drains cleanly on stop
+
+  =====================================================
+  Test Results: 22 / 22 passed (0 failed)
+  =====================================================
+  ```
+- **Status:** `Verified`
+
+---
+
 ## 2. Manual Desktop Verification Tests
 
 ### Test 2.1: Headless / Test Launch Window Verification
@@ -232,7 +283,7 @@ This document catalogs all automated and manual verification procedures for the 
   Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; $env:TEST_LAUNCH = '1'; & 'node_modules\.bin\electron.cmd' '.'
   ```
 - **Expected Result:** Process starts, initializes within 1500 ms, logs success, and exits with code 0.
-- **Actual Result (Executed Oct 31, 2026):**
+- **Actual Result (Executed Oct 31, 2026 & Nov 1, 2026):**
   - Logs `TEST_LAUNCH_SUCCESS: Electron window initialized successfully`.
   - Exits cleanly with exit code 0.
 - **Status:** `Verified`
@@ -255,10 +306,35 @@ This document catalogs all automated and manual verification procedures for the 
 
 ---
 
+### Test 2.3: Interactive Live Microphone Capture & Speech-to-Text (Phase 4)
+- **Purpose:** Verifies real microphone capture and speech recognition on physical Windows hardware:
+  1. User clicks **"Start"** button:
+     - Browser requests microphone permission (if first time).
+     - UI status transitions to emerald **"Listening"** with soundwave animation.
+  2. User speaks into the microphone (e.g., *"Hello world, testing local speech recognition"*):
+     - Every 3.0 seconds, non-silent audio is encoded to 16 kHz mono PCM WAV.
+     - While Whisper processes, a subtle **"Transcribing audio..."** indicator appears.
+     - Recognized speech is appended to the **Live Transcript** panel automatically.
+  3. User pauses or remains silent:
+     - Silence gate detects RMS < 0.005 and drops silent buffers without invoking Whisper.
+  4. User clicks **"Stop"** button:
+     - Recording stops immediately; remaining speech buffer >= 0.5s is flushed.
+     - Microphone hardware stream is released.
+     - UI transitions cleanly to **"Stopped"**.
+  5. User clicks **"Suggest Answer"**:
+     - Live transcribed conversation is submitted to Ollama, and an answer streams in the right panel.
+- **Command:**
+  ```powershell
+  npm run dev
+  ```
+- **Status:** `Pending User Physical Hardware Verification` (Unit test automated verification passed 22/22).
+
+---
+
 ## 3. Test Coverage Matrix
 
 | Area | Test Type | Automated? | Script / File | Current Status |
-| :--- | :--- | :---: | :--- | :---: |
+| :--- | :--- | :---: | :--- | :--- |
 | **TypeScript Strictness** | Static Analysis | Yes | `npx tsc --noEmit` | ✅ `Verified` |
 | **Vite / Electron Bundling** | Build Test | Yes | `npm run build` | ✅ `Verified` |
 | **Offline Whisper Accuracy** | Integration Test | Yes | `scripts/validate-whisper.ts` | ✅ `Verified` |
@@ -272,4 +348,7 @@ This document catalogs all automated and manual verification procedures for the 
 | **Concurrency Guard** | Unit Test | Yes | `scripts/test-ollama.ts` | ✅ `Verified` |
 | **Live Ollama Environment** | Environment Probe | Yes | `scripts/validate-ollama.ts` | ✅ `Verified` |
 | **Electron App Launch** | Smoke Test | Yes | `node_modules\.bin\electron.cmd .` | ✅ `Verified` |
-| **Live Microphone Capture** | Integration Test | No | Phase 4 Scope | ⏳ `Not Started` |
+| **Audio Resampling & DSP** | Unit Test | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
+| **WAV Header & Silence Gate** | Unit Test | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
+| **Transcription Queue** | Unit Test (Concurrency/Backpressure) | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
+| **Live Mic Hardware Verification**| Manual System Test | No | Interactive Windows Desktop | ⏳ `Pending User Hardware Test` |
