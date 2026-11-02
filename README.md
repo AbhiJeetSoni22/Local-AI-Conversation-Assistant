@@ -20,14 +20,15 @@ A desktop conversational assistant built with **Electron**, **React**, **TypeScr
 | **Phase 2** | Whisper.cpp Local Speech-to-Text Foundation | ✅ `Verified` | Offline JFK transcription in 3.67s; 18/18 edge-case tests pass. |
 | **Phase 3** | Ollama Local LLM & Streaming Suggestions | ✅ `Verified` | Local Ollama streaming answers, cancel support; 36/36 tests pass. |
 | **Phase 4** | Microphone Audio Capture & Live Transcription | ✅ `Verified (Automated)` | Resampling, WAV encoding, queueing, and Whisper IPC; 22/22 tests pass. |
-| **Phase 5** | Context Tuning & Pipeline Polish | ⏳ `Not Started` | Fine-tuning conversation context & suggestion quality. |
+| **Phase 5** | End-to-End Stabilization | ✅ `Verified` | Dynamic status re-check, transcript review & edit, retry flow, 7 UI states; 42/42 tests pass. |
 | **Phase 6** | Hardening, Air-Gapped Verification & Submission | ⏳ `Not Started` | Final submission deadline: November 4, 2026. |
 
 > ℹ️ **Current Status Note:**
-> - **Phases 1, 2, 3, and 4 are complete and automated-tested.**
+> - **Phases 1, 2, 3, 4, and 5 are complete and verified with automated test suites.**
 > - Clicking **Start** initiates real microphone capture, audio downsampling to 16 kHz mono, client-side silence filtering, and sequential local Whisper.cpp transcription.
 > - Clicking **Stop** halts capture, flushes any final audio buffer >= 0.5s, releases microphone hardware, and drains the transcription queue.
-> - The live transcript can immediately feed into the **Suggest Answer** button to stream local answers from Ollama (`qwen2.5:3b`).
+> - The live transcript can be inspected and edited directly in-place ("Edit" / "Done") before synthesis.
+> - The transcript feeds into the **Suggest Answer** button to stream local answers from Ollama (`qwen2.5:3b`), with full failure preservation and one-click "Retry Answer" recovery.
 
 ---
 

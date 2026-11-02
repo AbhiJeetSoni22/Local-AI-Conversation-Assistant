@@ -7,6 +7,7 @@ import { isAudioDebugEnabled } from './audio/debug'
 
 type AppStatus = 'Idle' | 'Listening' | 'Stopped' | 'Generating'
 type ComponentStatus = 'Checking' | 'Ready' | 'Unavailable'
+type SessionDisplayState = 'Ready' | 'Recording' | 'Transcribing' | 'Generating' | 'Completed' | 'Error' | 'Cancelled'
 
 const SAMPLE_TRANSCRIPT = `Speaker 1: Welcome everyone. We are discussing our system architecture for the local AI assistant.
 Speaker 2: Yes, the primary goal is ensuring all audio transcription and LLM inference remain 100% on the local device without any cloud APIs.
@@ -15,6 +16,7 @@ Speaker 1: Exactly. Can someone explain why we chose whisper.cpp and Ollama rath
 export default function App() {
   const [status, setStatus] = useState<AppStatus>('Idle')
   const [systemInfo, setSystemInfo] = useState<string>('Detecting environment...')
+  const [isCheckingServices, setIsCheckingServices] = useState<boolean>(false)
 
   // Whisper State
   const [whisperStatus, setWhisperStatus] = useState<ComponentStatus>('Checking')
@@ -26,6 +28,7 @@ export default function App() {
 
   // Conversation & Answer State
   const [transcript, setTranscript] = useState<string>('')
+  const [isEditingTranscript, setIsEditingTranscript] = useState<boolean>(false)
   const [suggestedAnswer, setSuggestedAnswer] = useState<string | null>(null)
   const [isGenerating, setIsGenerating] = useState<boolean>(false)
   const [isTranscribing, setIsTranscribing] = useState<boolean>(false)
@@ -33,12 +36,61 @@ export default function App() {
   const [transcriptionBusy, setTranscriptionBusy] = useState<boolean>(false)
   const [streamMeta, setStreamMeta] = useState<{ durationMs?: number; model?: string; isCancelled?: boolean } | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
+  const [generationError, setGenerationError] = useState<string | null>(null)
   const [copied, setCopied] = useState<boolean>(false)
 
   // Phase 4 Audio Recorder and Queue References
   const audioRecorderRef = useRef<AudioRecorder | null>(null)
   const transcriptionQueueRef = useRef<TranscriptionQueue | null>(null)
   const segmentGateRef = useRef<SegmentGate>(new SegmentGate())
+
+  // Dynamic Service Readiness Checker
+  const checkReadiness = async () => {
+    if (!window.electronApi) {
+      setSystemInfo('Web preview mode')
+      setWhisperStatus('Unavailable')
+      setOllamaStatus('Unavailable')
+      return
+    }
+
+    setIsCheckingServices(true)
+    try {
+      const [whisperRes, ollamaRes] = await Promise.all([
+        window.electronApi.getWhisperReadiness().catch((err) => ({
+          valid: false,
+          status: 'Unavailable' as const,
+          executableFound: false,
+          modelFound: false,
+          executablePath: '',
+          modelPath: '',
+          engine: 'cli' as const,
+          error: err instanceof Error ? err.message : String(err),
+        })),
+        window.electronApi.getOllamaReadiness().catch((err) => ({
+          ready: false,
+          status: 'Unavailable' as const,
+          serviceReachable: false,
+          modelAvailable: false,
+          baseUrl: 'http://127.0.0.1:11434',
+          model: 'qwen2.5:3b',
+          availableModels: [] as string[],
+          error: err instanceof Error ? err.message : String(err),
+        })),
+      ])
+
+      setWhisperInfo(whisperRes)
+      setWhisperStatus(whisperRes.status)
+      setOllamaInfo(ollamaRes)
+      setOllamaStatus(ollamaRes.status)
+
+      // If services are ready, clear previous service-related errors
+      if (whisperRes.status === 'Ready' && ollamaRes.status === 'Ready') {
+        setValidationError((prev) => (prev && (prev.includes('Whisper') || prev.includes('Ollama')) ? null : prev))
+      }
+    } finally {
+      setIsCheckingServices(false)
+    }
+  }
 
   useEffect(() => {
     // 1. Initialize Transcription Queue
@@ -80,47 +132,10 @@ export default function App() {
           setSystemInfo('Electron IPC available')
         })
 
-      // 3. Fetch Whisper readiness
-      window.electronApi.getWhisperReadiness()
-        .then((readiness) => {
-          setWhisperInfo(readiness)
-          setWhisperStatus(readiness.status)
-        })
-        .catch((err) => {
-          setWhisperStatus('Unavailable')
-          setWhisperInfo({
-            valid: false,
-            status: 'Unavailable',
-            executableFound: false,
-            modelFound: false,
-            executablePath: '',
-            modelPath: '',
-            engine: 'cli',
-            error: err instanceof Error ? err.message : String(err),
-          })
-        })
+      // 3. Initial Readiness Check
+      checkReadiness()
 
-      // 4. Fetch Ollama readiness
-      window.electronApi.getOllamaReadiness()
-        .then((readiness) => {
-          setOllamaInfo(readiness)
-          setOllamaStatus(readiness.status)
-        })
-        .catch((err) => {
-          setOllamaStatus('Unavailable')
-          setOllamaInfo({
-            ready: false,
-            status: 'Unavailable',
-            serviceReachable: false,
-            modelAvailable: false,
-            baseUrl: 'http://127.0.0.1:11434',
-            model: 'qwen2.5:3b',
-            availableModels: [],
-            error: err instanceof Error ? err.message : String(err),
-          })
-        })
-
-      // 5. Register Ollama streaming listeners
+      // 4. Register Ollama streaming listeners
       const unsubscribeChunk = window.electronApi.onOllamaChunk((data) => {
         setSuggestedAnswer((prev) => (prev ? prev + data.chunk : data.chunk))
       })
@@ -144,6 +159,7 @@ export default function App() {
       const unsubscribeError = window.electronApi.onOllamaError((data) => {
         setIsGenerating(false)
         setStatus((prev) => (prev === 'Generating' ? 'Stopped' : prev))
+        setGenerationError(data.error)
         setValidationError(`Generation error: ${data.error}`)
       })
 
@@ -172,6 +188,7 @@ export default function App() {
 
   const handleStart = async () => {
     setValidationError(null)
+    setIsEditingTranscript(false)
 
     // Validation: Whisper must be ready
     if (whisperStatus !== 'Ready') {
@@ -180,6 +197,8 @@ export default function App() {
       )
       return
     }
+
+    if (status === 'Listening' || isGenerating || transcriptionBusy) return
 
     try {
       // Defaults: pause-aligned utterance segmentation. Tuning/A-B options (see docs/TROUBLESHOOTING.md):
@@ -223,6 +242,8 @@ export default function App() {
 
   const handleSuggestAnswer = async () => {
     setValidationError(null)
+    setGenerationError(null)
+    setIsEditingTranscript(false)
 
     // Validation 1: Transcript must exist
     if (!transcript.trim()) {
@@ -255,13 +276,16 @@ export default function App() {
       if (window.electronApi) {
         const response = await window.electronApi.startAnswerGeneration(transcript)
         if (!response.success && response.error) {
+          setGenerationError(response.error)
           setValidationError(response.error)
           setIsGenerating(false)
           setStatus('Stopped')
         }
       }
     } catch (err) {
-      setValidationError(err instanceof Error ? err.message : String(err))
+      const errMsg = err instanceof Error ? err.message : String(err)
+      setGenerationError(errMsg)
+      setValidationError(errMsg)
       setIsGenerating(false)
       setStatus('Stopped')
     }
@@ -280,15 +304,18 @@ export default function App() {
     setSuggestedAnswer(null)
     setStreamMeta(null)
     setValidationError(null)
+    setGenerationError(null)
   }
 
   const handleLoadSampleTranscript = () => {
     setTranscript(SAMPLE_TRANSCRIPT)
     setValidationError(null)
+    setIsEditingTranscript(false)
   }
 
   const handleClearTranscript = () => {
     setTranscript('')
+    setIsEditingTranscript(false)
     setValidationError(null)
   }
 
@@ -320,6 +347,20 @@ export default function App() {
       )
     })
   }
+
+  const sessionState: SessionDisplayState = isGenerating
+    ? 'Generating'
+    : status === 'Listening'
+      ? 'Recording'
+      : transcriptionBusy
+        ? 'Transcribing'
+        : generationError || validationError
+          ? 'Error'
+          : streamMeta?.isCancelled
+            ? 'Cancelled'
+            : suggestedAnswer && !isGenerating
+              ? 'Completed'
+              : 'Ready'
 
   return (
     <div className="app-container">
@@ -365,14 +406,40 @@ export default function App() {
                 {ollamaStatus === 'Ready' ? (ollamaInfo?.model || 'Ready') : ollamaStatus}
               </span>
             </div>
+
+            <span className="telemetry-divider" aria-hidden="true"></span>
+
+            {/* Dynamic Re-check Services Button */}
+            <button
+              id="btn-recheck-services"
+              className="telemetry-recheck"
+              onClick={() => checkReadiness()}
+              disabled={isCheckingServices}
+              title="Re-check local Whisper and Ollama service readiness"
+              aria-label="Re-check services"
+            >
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={isCheckingServices ? 'spin' : ''}
+                aria-hidden="true"
+              >
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+              </svg>
+              <span>{isCheckingServices ? 'Checking...' : 'Re-check'}</span>
+            </button>
           </div>
 
           {/* Active Session Status Badge */}
-          <div className={`session-badge ${status.toLowerCase()}`}>
+          <div className={`session-badge ${sessionState.toLowerCase()}`}>
             <span className="session-dot"></span>
-            <span className="session-label">
-              {status === 'Generating' ? 'Generating' : status === 'Listening' ? 'Recording' : status}
-            </span>
+            <span className="session-label">{sessionState}</span>
           </div>
         </div>
       </header>
@@ -385,8 +452,16 @@ export default function App() {
             id="btn-start"
             className="btn btn-primary"
             onClick={handleStart}
-            disabled={status === 'Listening' || isGenerating}
-            title="Start capturing microphone audio and transcribing locally"
+            disabled={status === 'Listening' || isGenerating || transcriptionBusy || whisperStatus !== 'Ready'}
+            title={
+              whisperStatus !== 'Ready'
+                ? 'Whisper STT is unavailable. Check telemetry or bin/ directory.'
+                : status === 'Listening'
+                  ? 'Recording is already in progress.'
+                  : transcriptionBusy
+                    ? 'Wait for previous transcription to finish.'
+                    : 'Start capturing microphone audio and transcribing locally'
+            }
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
@@ -460,8 +535,14 @@ export default function App() {
             <span className="hint-active">
               {isTranscribing ? 'Transcribing speech chunk...' : 'Listening... speak into microphone'}
             </span>
+          ) : transcriptionBusy ? (
+            <span className="hint-transcribing">Finishing transcription with whisper.cpp...</span>
           ) : isGenerating ? (
             <span className="hint-generating">Streaming answer locally via {ollamaInfo?.model || 'qwen2.5:3b'}</span>
+          ) : sessionState === 'Error' ? (
+            <span className="hint-error">Action interrupted. Review notice above or retry.</span>
+          ) : sessionState === 'Completed' ? (
+            <span className="hint-completed">Answer generated locally • Ready for follow-up</span>
           ) : (
             <span className="hint-idle">Zero cloud dependencies • 100% offline</span>
           )}
@@ -493,18 +574,35 @@ export default function App() {
             <div className="panel-header-title">
               <h2 id="heading-transcript" className="panel-title">Conversation Transcript</h2>
               <span className="panel-badge">
-                {status === 'Listening' ? (isTranscribing ? 'Transcribing...' : 'Live') : 'whisper.cpp'}
+                {status === 'Listening'
+                  ? (isTranscribing ? 'Transcribing...' : 'Live')
+                  : transcriptionBusy
+                    ? 'Finishing...'
+                    : isEditingTranscript
+                      ? 'Editing'
+                      : 'whisper.cpp'}
               </span>
             </div>
             <div className="panel-header-actions">
-              {transcript && status !== 'Listening' && (
-                <button
-                  className="btn-text-ghost"
-                  onClick={handleClearTranscript}
-                  title="Clear conversation transcript"
-                >
-                  Clear
-                </button>
+              {transcript && status !== 'Listening' && !isGenerating && (
+                <>
+                  <button
+                    id="btn-edit-transcript"
+                    className="btn-text-ghost"
+                    onClick={() => setIsEditingTranscript((prev) => !prev)}
+                    title={isEditingTranscript ? 'Done editing' : 'Edit transcript text before sending to AI'}
+                  >
+                    {isEditingTranscript ? 'Done' : 'Edit'}
+                  </button>
+                  <button
+                    id="btn-clear-transcript"
+                    className="btn-text-ghost"
+                    onClick={handleClearTranscript}
+                    title="Clear conversation transcript"
+                  >
+                    Clear
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -527,20 +625,59 @@ export default function App() {
                 <div className="notice-code-block">
                   Place <code>whisper-cli.exe</code> in <code>bin/</code> and <code>ggml-base.en.bin</code> in <code>models/</code>
                 </div>
+                <button
+                  type="button"
+                  className="btn-notice-recheck"
+                  onClick={() => checkReadiness()}
+                  disabled={isCheckingServices}
+                >
+                  {isCheckingServices ? 'Checking Whisper...' : 'Re-check Whisper'}
+                </button>
               </div>
             )}
 
-            {/* Transcript Content Display */}
+            {/* Transcript Content Display or Editor */}
             {transcript ? (
-              <div className="transcript-canvas">
-                {renderFormattedTranscript(transcript)}
-                {status === 'Listening' && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94a3b8', fontSize: '12px', marginTop: '8px' }}>
-                    <span className="status-dot listening" style={{ width: 6, height: 6 }}></span>
-                    <span>{isTranscribing ? 'Transcribing audio chunk...' : 'Listening for speech...'}</span>
+              isEditingTranscript ? (
+                <div className="transcript-edit-container">
+                  <textarea
+                    id="transcript-editor"
+                    className="transcript-textarea"
+                    value={transcript}
+                    onChange={(e) => setTranscript(e.target.value)}
+                    placeholder="Edit conversation transcript here..."
+                    aria-label="Edit conversation transcript"
+                  />
+                  <div className="transcript-edit-hints">
+                    <span className="edit-hint-text">
+                      Review or correct words (e.g. technical names). Edits will be sent to Ollama.
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-utility-primary"
+                      onClick={() => setIsEditingTranscript(false)}
+                    >
+                      Done Editing
+                    </button>
                   </div>
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="transcript-canvas">
+                  {renderFormattedTranscript(transcript)}
+                  {status === 'Listening' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94a3b8', fontSize: '12px', marginTop: '8px' }}>
+                      <span className="status-dot listening" style={{ width: 6, height: 6 }}></span>
+                      <span>{isTranscribing ? 'Transcribing audio chunk...' : 'Listening for speech...'}</span>
+                    </div>
+                  )}
+                  {transcriptionBusy && status !== 'Listening' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#38bdf8', fontSize: '12px', marginTop: '8px' }}>
+                      <span className="status-dot checking" style={{ width: 6, height: 6 }}></span>
+                      <span>Finishing final transcription...</span>
+                    </div>
+                  )}
+                </div>
+              )
             ) : status === 'Listening' ? (
               <div className="state-empty listening">
                 <div className="empty-indicator pulse">
@@ -593,6 +730,16 @@ export default function App() {
               </span>
             </div>
             <div className="panel-header-actions">
+              {generationError && !isGenerating && (
+                <button
+                  className="btn-text-ghost"
+                  onClick={handleSuggestAnswer}
+                  disabled={transcriptionBusy || ollamaStatus !== 'Ready' || !transcript.trim()}
+                  title="Retry generating answer"
+                >
+                  Retry
+                </button>
+              )}
               {suggestedAnswer && !isGenerating && (
                 <>
                   <button
@@ -641,11 +788,53 @@ export default function App() {
                 <div className="notice-code-block">
                   Run in terminal: <code>ollama pull qwen2.5:3b</code>
                 </div>
+                <button
+                  type="button"
+                  className="btn-notice-recheck"
+                  onClick={() => checkReadiness()}
+                  disabled={isCheckingServices}
+                >
+                  {isCheckingServices ? 'Checking Ollama...' : 'Re-check Ollama'}
+                </button>
               </div>
             )}
 
             {/* Answer Display */}
-            {suggestedAnswer !== null ? (
+            {generationError && !isGenerating ? (
+              <div className="answer-error-card" role="alert">
+                <div className="answer-error-header">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>Answer Generation Failed</span>
+                </div>
+                <p className="answer-error-message">{generationError}</p>
+                <div className="answer-error-actions">
+                  <button
+                    id="btn-retry-answer"
+                    className="btn btn-primary btn-retry"
+                    onClick={handleSuggestAnswer}
+                    disabled={isGenerating || status === 'Listening' || transcriptionBusy || ollamaStatus !== 'Ready' || !transcript.trim()}
+                    title="Retry answer generation using the existing transcript"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="1 4 1 10 7 10" />
+                      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                    </svg>
+                    <span>Retry Answer</span>
+                  </button>
+                  <button
+                    className="btn-text-ghost"
+                    onClick={() => setGenerationError(null)}
+                    title="Dismiss error notice"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ) : suggestedAnswer !== null ? (
               <div className="answer-canvas">
                 {/* Meta bar */}
                 <div className="answer-status-bar">

@@ -15,6 +15,7 @@
     "test:audio": "tsx scripts/test-phase4-audio.ts",
     "test:accuracy": "tsx scripts/test-transcription-accuracy.ts",
     "test:pipeline": "tsx scripts/test-pipeline-regression.ts",
+    "test:phase5": "tsx scripts/test-phase5-stabilization.ts",
     "analyze:resampler": "tsx scripts/analyze-resampler.ts",
     "diagnose:whisper": "tsx scripts/diagnose-whisper.ts"
   },

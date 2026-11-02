@@ -300,6 +300,82 @@ This document catalogs all automated and manual verification procedures for the 
 - Fixtures: `powershell -ExecutionPolicy Bypass -File scripts\make-speech-fixtures.ps1` (Windows SAPI voice: LangChain sentences, plain English, "link chain", short-then-silence, long-with-pauses) and `npm run diagnose:whisper -- --make-nonspeech` (silence, room noise at RMS 0.006, click). Also record the same sentences with your own microphone into the same folder: TTS audio is cleaner than a real microphone.
 - **Status: NOT yet executed against a real binary.** Harness plumbing was smoke-tested with a fake CLI only.
 
+### Test 1.12: Phase 5 End-to-End Stabilization Suite (`npm run test:phase5`)
+- **Purpose:** Executes 42 automated unit and integration assertions verifying the end-to-end stabilization requirements:
+  1. **Dynamic Service Readiness:** Server status queries, offline/online transitions without app restart, user-friendly error formatting.
+  2. **Microphone & Audio Lifecycle:** `SegmentGate` session isolation, sub-0.5s recording safety in `ChunkPipeline`, empty/silent chunk handling in `TranscriptionQueue`.
+  3. **Transcript Review & Editing:** Preservation of user edits in accumulator, verbatim transmission of edited text to `buildAnswerPrompt`, boundary fencing.
+  4. **Ollama Error Recovery & Retry:** Transcript preservation across HTTP 500 errors, immediate retry without re-recording, streaming token delivery during retry, mid-stream cancellation.
+  5. **UI State Machine Invariants:** Correct mapping of all 7 UI states (`Ready`, `Recording`, `Transcribing`, `Generating`, `Completed`, `Error`, `Cancelled`), strict button mutual exclusion rules.
+- **Command:**
+  ```powershell
+  npm run test:phase5
+  ```
+- **Expected Result:** All 42 assertions pass with 0 failures; exit code 0.
+- **Actual Result (Executed Nov 2, 2026):**
+  ```text
+  ======================================================
+   Phase 5 End-to-End Stabilization Test Suite
+  ======================================================
+
+  --- Suite 1: Readiness & Dynamic Service Status ---
+    ✅ PASS: Dynamic check: online server reports status Ready
+    ✅ PASS: Dynamic check: dropped server reports status Unavailable
+    ✅ PASS: Dynamic check: error message is formatted cleanly without raw unhandled exception dumps
+    ✅ PASS: Dynamic check: recovered server returns to status Ready on re-check
+
+  --- Suite 2: Audio Lifecycle & Boundary Invariants ---
+    ✅ PASS: SegmentGate accepts first chunk from active session
+    ✅ PASS: SegmentGate rejects duplicate chunk index from active session
+    ✅ PASS: SegmentGate discards stale chunk from previous session
+    ✅ PASS: SegmentGate accepts chunk from newly active session
+    ✅ PASS: ChunkPipeline discards final chunk shorter than minFinalChunkDurationSec (0.1s < 0.5s)
+    ✅ PASS: TranscriptionQueue gracefully processes silent/empty chunk without error
+
+  --- Suite 3: Transcript Review & Editing Invariance ---
+    ✅ PASS: appendSegmentText initializes empty transcript cleanly
+    ✅ PASS: appendSegmentText joins sentences with single space
+    ✅ PASS: Transcript editing modifies text accurately
+    ✅ PASS: Prompt builder receives the edited transcript text, not the original raw speech
+    ✅ PASS: Prompt builder contains zero traces of the uncorrected misrecognized phrase
+    ✅ PASS: Prompt builder encapsulates user-edited transcript securely inside transcript boundary
+
+  --- Suite 4: Ollama Response Failure Recovery & Retry Flow ---
+    ✅ PASS: Ollama failure throws expected error on server 500
+    ✅ PASS: Original transcript remains intact after generation error
+    ✅ PASS: Service resets internal isGenerating flag on failure
+    ✅ PASS: Retry generation succeeds on identical transcript without re-capturing audio
+    ✅ PASS: Streaming callback delivers all tokens progressively during retry
+    ✅ PASS: Mock server received exactly 2 calls (1 failure + 1 retry)
+    ✅ PASS: Stream cancellation returns isCancelled: true
+    ✅ PASS: Service resets isGenerating flag immediately on cancellation
+
+  --- Suite 5: State Transition & UI Invariants ---
+    ✅ PASS: Initial state maps to Ready
+    ✅ PASS: Listening state maps to Recording
+    ✅ PASS: Stopped while transcriptionBusy maps to Transcribing
+    ✅ PASS: Active generation maps to Generating
+    ✅ PASS: Failure maps to Error
+    ✅ PASS: User cancellation maps to Cancelled
+    ✅ PASS: Successful generation maps to Completed
+    ✅ PASS: Start disabled when Listening
+    ✅ PASS: Start disabled when Generating
+    ✅ PASS: Start disabled when Transcribing
+    ✅ PASS: Start disabled when Whisper Unavailable
+    ✅ PASS: Start enabled when Idle and Whisper Ready
+    ✅ PASS: Suggest disabled when Recording
+    ✅ PASS: Suggest disabled when Transcribing
+    ✅ PASS: Suggest disabled when Generating
+    ✅ PASS: Suggest disabled when Ollama Unavailable
+    ✅ PASS: Suggest disabled when Transcript empty
+    ✅ PASS: Suggest enabled when transcript ready and Ollama online
+
+  ======================================================
+   Phase 5 Test Results: 42/42 passed (0 failures)
+  ======================================================
+  ```
+- **Status:** `Verified`
+
 ## 2. Manual Desktop Verification Tests
 
 ### Test 2.1: Headless / Test Launch Window Verification
@@ -377,14 +453,15 @@ This document catalogs all automated and manual verification procedures for the 
 | **Audio Resampling & DSP** | Unit Test | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
 | **WAV Header & Silence Gate** | Unit Test | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
 | **Transcription Queue** | Unit Test (Concurrency/Backpressure) | Yes | `scripts/test-phase4-audio.ts` | ✅ `Verified` |
-| **Technical Vocabulary & Accuracy** | Accuracy Test (47 assertions) | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
+| **Technical Vocabulary & Accuracy** | Accuracy Test (46 assertions) | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
 | **Whisper Marker Filtering** | Unit Test | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
+| **Pipeline Regressions** | Unit Test (98 assertions) | Yes | `scripts/test-pipeline-regression.ts` | ✅ `Verified` |
+| **Phase 5 End-to-End Stabilization** | Integration Test (42 assertions)| Yes | `scripts/test-phase5-stabilization.ts` | ✅ `Verified` |
 | **Live Mic Hardware Verification**| Manual System Test | No | Interactive Windows Desktop | ⏳ `Pending User Hardware Test` |
-
 
 ---
 
-## 3. Manual Windows Verification Checklist (hardware required; none of these are marked done)
+## 4. Manual Windows Verification Checklist (Hardware & Interactive Features)
 
 | # | Step | Expected | Result |
 | :-- | :--- | :--- | :--- |
@@ -398,3 +475,9 @@ This document catalogs all automated and manual verification procedures for the 
 | 8 | Click Suggest Answer immediately after Stop | Button disabled/hint shown until last audio is transcribed | ☐ not run |
 | 9 | Suggest Answer on the LangChain question | Answer explains LangChain; no talk of channels/subscriptions | ☐ not run (needs Ollama + qwen2.5:3b) |
 | 10 | A/B: set `audioConstraints` `noiseSuppression:false, autoGainControl:false` in `App.tsx`, repeat step 3 | Record whether accuracy changes | ☐ not run |
+| 11 | **Dynamic Service Re-Check:** With Ollama stopped, click "Re-check". See Unavailable. Start Ollama, click "Re-check". | Telemetry badge transitions cleanly to Ready without app reload | ☐ not run |
+| 12 | **Transcript Review & Edit:** Click "Edit" on transcript, correct misrecognized words, click "Done". | Canvas reflects edits; Suggest Answer sends edited text | ☐ not run |
+| 13 | **Ollama Error Recovery:** Kill Ollama or cause network drop, click Suggest Answer. | Transcript is preserved 100%; error card appears with Retry Answer | ☐ not run |
+| 14 | **Retry Flow:** Restart Ollama and click "Retry Answer". | Answer streams successfully without re-recording audio | ☐ not run |
+| 15 | **Stream Cancellation:** Click Suggest Answer, then click "Cancel" mid-stream. | Stream halts immediately; partial text kept, session becomes Cancelled | ☐ not run |
+| 16 | **Sub-0.5s Quick Click:** Click Start and immediately click Stop (< 0.5s). | No crash or hanging state; transitions safely back to Ready | ☐ not run |

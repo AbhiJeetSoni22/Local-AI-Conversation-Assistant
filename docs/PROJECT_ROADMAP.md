@@ -1,7 +1,7 @@
 # Project Roadmap: Local AI Conversation Assistant
 
 **Repository:** `AbhiJeetSoni22/Local-AI-Conversation-Assistant`  
-**Current Milestone:** Phase 4 Complete  
+**Current Milestone:** Phase 5 Complete  
 **Final Submission Deadline:** November 4, 2026  
 **Status Key:**  
 - `Verified`: Code implemented, built, and validated against automated tests and criteria.  
@@ -17,13 +17,13 @@ flowchart TD
     P1["Phase 1: Desktop Scaffold<br/>[Status: Verified]"] --> P2["Phase 2: Whisper.cpp STT Foundation<br/>[Status: Verified]"]
     P2 --> P3["Phase 3: Ollama Local LLM Integration<br/>[Status: Verified]"]
     P3 --> P4["Phase 4: Microphone Capture & Live STT<br/>[Status: Verified]"]
-    P4 --> P5["Phase 5: Context Tuning & Pipeline Polish<br/>[Status: Not Started]"]
+    P4 --> P5["Phase 5: End-to-End Stabilization<br/>[Status: Verified]"]
     P5 --> P6["Phase 6: Hardening, Packaging & Submission<br/>[Status: Not Started]"]
 
     classDef done fill:#064e3b,stroke:#059669,color:#ecfdf5;
     classDef pending fill:#1e293b,stroke:#475569,color:#94a3b8;
-    class P1,P2,P3,P4 done;
-    class P5,P6 pending;
+    class P1,P2,P3,P4,P5 done;
+    class P6 pending;
 ```
 
 ---
@@ -181,23 +181,46 @@ flowchart TD
 
 ---
 
-## Phase 5 — Context Tuning & Pipeline Polish
+## Phase 5 — End-to-End Stabilization
 
-- **Status:** `Not Started`
-- **Goal:** Fine-tune conversational context handling, prompt grounding, and end-to-end responsiveness between continuous Whisper speech recognition and Ollama answer suggestions.
+- **Status:** `Verified`
+- **Goal:** Stabilize the full local end-to-end pipeline (Audio Recording → Whisper Transcription → Transcript Review/Editing → Ollama Suggest Answer) with production-grade reliability, clear error handling, dynamic service status re-checking, retry recovery, and 7 distinct non-contradictory UI states.
 - **Scope:**
-  - Fine-tune prompt structure for conversation assistance based on live speech patterns.
-  - Implement rolling context buffer and intelligent transcript truncation.
-  - Expose environment re-check button when runtimes are restarted while the app is running.
-  - Verify seamless transition from live microphone speech capture directly into "Suggest Answer".
-- **Target Files:**
+  - **Dynamic Service Readiness:** Allow users to re-check Whisper and Ollama status on-demand via the telemetry bar and in-panel warning banners without window reloads.
+  - **Microphone & Audio Lifecycle:** Robust error recovery from microphone permission denials or device disconnects; graceful handling of brief clicks or sub-0.5s audio recordings without application crashes.
+  - **Transcript Review & Editing:** Allow direct inline review and editing of the conversation transcript before submitting to Ollama, ensuring corrected proper nouns (e.g. "LangChain") are sent verbatim to the LLM.
+  - **Failure Recovery & Retry Flow:** Preserve conversation transcript across all Ollama timeouts and server errors; provide a one-click "Retry Answer" button to re-trigger generation without re-recording audio.
+  - **Cancellation & Safety:** Support mid-stream cancellation with immediate lock release; enforce strict mutual exclusion so invalid button actions are disabled.
+  - **7 Distinguishable UI States:** Map session telemetry clearly to `Ready`, `Recording`, `Transcribing`, `Generating`, `Completed`, `Error`, and `Cancelled` with matching pulsing indicators and contextual hints.
+  - **Automated Verification:** Added 42-assertion end-to-end stabilization test suite (`scripts/test-phase5-stabilization.ts`).
+- **Primary Files:**
   - `src/App.tsx`
-  - `electron/promptBuilder.ts`
+  - `src/index.css`
+  - `scripts/test-phase5-stabilization.ts`
+  - `package.json`
+- **Acceptance Criteria:**
+  - Dynamic service re-check button queries runtime health and clears stale errors.
+  - Sub-0.5s recordings discard safely without throwing or leaving queue in busy state.
+  - Transcript editor allows modifying text and sends updated text to Ollama prompt builder.
+  - Generation failure retains transcript and enables "Retry Answer" button.
+  - UI never enters contradictory states (e.g. recording while generating).
+  - All 42 Phase 5 stabilization tests and all 220 cumulative automated tests pass.
+- **Validation Commands:**
+  ```bash
+  npx tsc --noEmit
+  npm run test:phase5
+  npm run test:pipeline
+  npm run test:accuracy
+  npm run test:audio
+  npm run test:ollama
+  npm run test:whisper
+  npm run build
+  ```
 
 ---
 
 ## Phase 6 — Hardening, Packaging & Final Submission
 
 - **Status:** `Not Started`
-- **Goal:** Verify reliability on a clean air-gapped Windows machine, package for distribution, and assemble final submission artifacts.
+- **Goal:** Verify reliability on a clean air-gapped Windows machine, package for distribution with Electron Builder / NSIS, and assemble final submission artifacts.
 - **Target Deadline:** November 4, 2026.

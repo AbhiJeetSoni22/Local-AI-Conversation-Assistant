@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Phase 5: End-to-End Stabilization] - 2026-11-02
+
+### Added
+- **Dynamic Service Readiness & Status Re-check (`src/App.tsx`, `src/index.css`)**:
+  - Implemented `checkReadiness()` querying both `window.electronApi.getWhisperReadiness()` and `window.electronApi.getOllamaReadiness()` concurrently.
+  - Added a dedicated "Re-check" telemetry action in the top header and action buttons inside both Whisper and Ollama warning notice boxes.
+  - Clear previous error banners automatically when runtimes transition to `Ready`.
+- **Transcript Review & In-Place Editing (`src/App.tsx`, `src/index.css`)**:
+  - Added full transcript editing mode toggled via "Edit" / "Done" action button in the Conversation Transcript panel header.
+  - Renders a styled, responsive dark textarea enabling users to inspect, correct, or refine transcribed text (e.g., phonetic misrecognitions like "link chain" -> "LangChain") prior to AI submission.
+  - Edited text is passed directly into Ollama's `startAnswerGeneration` and prompt builder without aggressive auto-correction bias.
+- **Ollama Error Recovery & Retry Flow (`src/App.tsx`, `src/index.css`)**:
+  - Preserved conversation transcript across all Ollama generation failures, timeouts, and network interruptions.
+  - Added dedicated error presentation card inside the AI Suggested Answer panel featuring a primary "Retry Answer" action button that re-submits the existing transcript without requiring re-recording.
+  - Dismiss button allows clearing the error card without affecting transcript content.
+- **Strict UI State Machine & Telemetry Cluster (`src/App.tsx`, `src/index.css`)**:
+  - Re-mapped active session telemetry to 7 explicit, non-contradictory states: `Ready`, `Recording`, `Transcribing`, `Generating`, `Completed`, `Error`, and `Cancelled`.
+  - Added customized visual badges, pulsing animations, and contextual action bar hints for each state.
+  - Enforced mutual exclusion: `Start` is disabled when listening, transcribing, generating, or when Whisper is unavailable; `Suggest Answer` is disabled while recording, transcribing, generating, when transcript is empty, or when Ollama is unavailable.
+- **Automated Phase 5 Test Suite (`scripts/test-phase5-stabilization.ts`)**:
+  - Implemented 42 unit and integration tests across 5 test suites covering dynamic health checks, audio lifecycle/boundary handling, transcript editing invariance, failure recovery and retry, and state transition mutual exclusion.
+  - Registered `"test:phase5"` command in `package.json`.
+
+### Verified
+- `npx tsc --noEmit`: 0 errors.
+- `npm run test:phase5`: 42 / 42 passed.
+- `npm run test:whisper`: 18 / 18 passed.
+- `npm run test:audio`: 22 / 22 passed.
+- `npm run test:ollama`: 36 / 36 passed.
+- `npm run test:accuracy`: 46 / 46 passed.
+- `npm run test:pipeline`: 98 / 98 passed.
+- `npm run build`: built production bundles cleanly in 2.3s.
+
+---
+
 ## [Phase 4: Transcription Pipeline Regression Fix] - 2026-11-02
 
 > Status: automated and synthetic-audio verification complete. **Real-microphone and real-Whisper verification is pending** on the user's Windows machine (see `TESTING_AND_VALIDATION.md` section 3). The single root cause of the user's three reported transcripts is **not** conclusively proven; see `IMPLEMENTATION_STATUS.md` Observation 3.

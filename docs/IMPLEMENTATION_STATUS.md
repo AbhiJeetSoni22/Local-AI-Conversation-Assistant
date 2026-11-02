@@ -1,8 +1,9 @@
 # Implementation Status & Known Issues Matrix
 
-**Last Audit Date:** November 1, 2026  
+**Last Audit Date:** November 2, 2026  
 **Auditor:** Senior Engineering Pair  
 **Baseline Branch:** `main`  
+**Current Milestone:** Phase 5 Verified  
 
 ---
 
@@ -14,7 +15,7 @@ The following features have been fully implemented, built, and verified with aut
 | :--- | :---: | :--- | :--- | :--- | :--- |
 | **Electron App Scaffold** | `Verified` | `electron/main.ts`, `vite.config.ts`, `package.json` | `npm run build` exits 0; window initializes cleanly under `TEST_LAUNCH=1`. | Menu bar hidden; window resize limits set (720x520 min). | Preserve in future phases. |
 | **Electron Process Sandbox** | `Verified` | `electron/main.ts`, `electron/preload.ts` | Context isolation verified via preload contextBridge inspection; zero Node APIs in renderer. | Preload bridge must remain strictly typed and minimal. | Maintain strict security defaults. |
-| **Frontend Layout & Controls** | `Verified` | `src/App.tsx`, `src/index.css` | Interactive state transitions between `Idle`, `Listening`, `Stopped`, and `Generating`. | Live microphone streaming wired in Phase 4. | Proceed to Phase 5 orchestration polish. |
+| **Frontend Layout & Controls** | `Verified` | `src/App.tsx`, `src/index.css` | Interactive state transitions between `Idle`, `Listening`, `Stopped`, and `Generating`. | Live microphone streaming wired in Phase 4. | Proceed to Phase 6 packaging. |
 | **Premium Dark UI Redesign** | `Verified` | `src/App.tsx`, `src/index.css`, `electron/main.ts` | Polished obsidian design system, unified telemetry cluster, clear action hierarchy, and card-less canvas layout. | Transcribing indicator active during speech processing. | Maintain visual polish. |
 | **Whisper Path Resolution** | `Verified` | `electron/whisperConfig.ts` | Tested via `npm run validate:whisper` and environment variable overrides. | Relies on convention paths `./bin` and `./models`. | Support packaged paths if bundled later. |
 | **WAV Input Validation** | `Verified` | `electron/wavValidator.ts` | Passed all 5 audio validation tests in `npm run test:whisper`. | Expects 16-bit PCM WAV; non-PCM rejected. | Validates client-encoded chunks cleanly. |
@@ -33,6 +34,11 @@ The following features have been fully implemented, built, and verified with aut
 | **Sequential Queue & Backpressure** | `Verified (Automated)` | `src/audio/transcriptionQueue.ts` | Strict sequential FIFO, concurrency <= 1, session invalidation, duplicate prevention, bounded backpressure with protected final chunk (`test:audio`, `test:pipeline`). | Drops older chunks when depth exceeds 3 (counted). | Prevents CPU saturation. |
 | **IPC Chunk Transcription Bridge** | `Verified` | `electron/main.ts`, `electron/preload.ts` | Typed IPC handler `whisper:transcribe-chunk` validates WAV and transcribes via `WhisperService`. | Exposes clean, non-node API. | Verified in build & smoke launch. |
 | **Live Transcript Appending** | `Verified` | `src/App.tsx` | Transcribed text progressively appends to transcript panel; clean Start/Stop lifecycle. | Relies on local whisper.cpp execution. | Tested in build and smoke launch. |
+| **Dynamic Service Re-Checking** | `Verified` | `src/App.tsx`, `src/index.css` | Users can query Whisper and Ollama readiness on-demand via header telemetry button and notice cards without reloading window. | `test:phase5` Suite 1 (4 assertions). | Resolves Observation 2. |
+| **Transcript Review & In-Place Editing** | `Verified` | `src/App.tsx`, `src/index.css` | Users can review and edit transcript text directly in-place before sending to Ollama; edits are preserved and passed to prompt builder. | `test:phase5` Suite 3 (6 assertions). | Empowers users to correct technical terms without auto-correction bias. |
+| **Ollama Error Recovery & Retry** | `Verified` | `src/App.tsx`, `src/index.css` | Generation failure preserves transcript text and presents dedicated "Retry Answer" action without re-recording audio. | `test:phase5` Suite 4 (7 assertions). | Full transcript safety across timeouts and network dropouts. |
+| **7 Distinguishable UI States** | `Verified` | `src/App.tsx`, `src/index.css` | App state machine strictly distinguishes `Ready`, `Recording`, `Transcribing`, `Generating`, `Completed`, `Error`, and `Cancelled`. | `test:phase5` Suite 5 (18 assertions). | Zero contradictory UI states. |
+| **Phase 5 Automated Test Suite** | `Verified` | `scripts/test-phase5-stabilization.ts` | `npm run test:phase5` passes 42 / 42 tests covering readiness, audio boundaries, transcript editing, retry, and UI states. | Deterministic mock server and synthetic audio. | Integrated in CI/package.json. |
 
 ---
 
@@ -57,10 +63,9 @@ The following features have been fully implemented, built, and verified with aut
 - **Status:** Resolved in Phase 4.
 - **Resolution:** `src/audio/resampler.ts` explicitly downsamples all browser audio streams (44.1 kHz or 48 kHz) to 16,000 Hz single-channel mono PCM with a stateful windowed-sinc `StreamingResampler` before WAV encoding and IPC transfer. (The original implementation resampled each 128-sample block independently and was found to distort timing/pitch and alias high frequencies; fixed in the transcription-regression pass, see Observation 3.)
 
-### Observation 2: Single Validation Check on Mount
-- **Finding:** The React UI checks Whisper and Ollama readiness once when the app mounts. If the user starts Ollama or downloads a model while the app is running, they must restart the app to clear the `Unavailable` badge.
-- **Risk Level:** Low.
-- **Recommendation for Phase 5:** Expose a "Re-check Environment" button in the warning boxes.
+### Observation 2: Single Validation Check on Mount (RESOLVED)
+- **Status:** Resolved in Phase 5.
+- **Resolution:** Added `checkReadiness()` function and exposed a dynamic "Re-check" button in the header telemetry bar as well as direct "Re-check Whisper" and "Re-check Ollama" action buttons in both warning notice boxes. Users can start Ollama or place binaries without having to reload the window. Covered by automated tests in `test-phase5-stabilization.ts` Suite 1.
 
 ### Observation 3: Transcription regression pass (Phase 4 follow-up) - STATUS: fixes implemented, hardware verification PENDING
 - **Confirmed defects fixed (evidence in `test:pipeline`, `analyze:resampler`):** per-block resampler distortion (+0.78 % / -0.95 % time-scale error, 12-26 dB SDR, 10 kHz tone passing at -12.5 / -7.1 dB); blind 3.0 s cuts that split words and send trailing silence/noise/clicks to Whisper; text-based `endsWith` dedupe that erased genuinely repeated speech; Suggest Answer enabled while the final chunk was still being transcribed; regex deny-list deleting genuine words; transcript text logged to the console in any non-production run; docs that contradicted the code (`-sns`/`-nf`/`-nth` described as enabled; "drain on Stop" that did not exist).
