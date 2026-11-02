@@ -27,7 +27,6 @@ import {
   DEFAULT_TECHNICAL_VOCABULARY,
   buildInitialPrompt,
   filterWhisperMarkers,
-  filterHallucinations,
 } from '../electron/vocabularyConfig'
 import { WhisperService } from '../electron/whisperService'
 import { validateWhisperEnvironment } from '../electron/whisperConfig'
@@ -164,25 +163,20 @@ async function runAccuracyTests() {
     'Genuine speech without markers is preserved verbatim'
   )
 
-  // YouTube / outro hallucination patterns
-  assert(
-    filterHallucinations('The channel is called LANGCHAIN and if you subscribe it\'s a great way.') === '',
-    'Filters YouTube channel and subscription boilerplate completely'
-  )
-
-  const mixedGarble = 'Hello I would like to know about The channel is called LANGCHAIN and if you subscribe it\'s a... Importance and the Rule of the LangChain. Happy?'
-  const cleanedGarble = filterWhisperMarkers(mixedGarble)
-  assert(
-    cleanedGarble.includes('Hello I would like to know about') &&
-      !cleanedGarble.includes('channel is called') &&
-      !cleanedGarble.includes('if you subscribe'),
-    `Strips YouTube outro hallucinations from mixed speech: "${cleanedGarble}"`
-  )
-
-  assert(
-    filterWhisperMarkers('Thank you for watching. Please like and subscribe.') === '',
-    'Filters outro "Thank you for watching / subscribe" boilerplate to empty'
-  )
+  // Genuine speech must never be deleted just because it resembles a known hallucination.
+  // (The earlier regex list removed phrases like "the channel is called ..." and a trailing "happy?".)
+  const legit = [
+    'Is the customer happy?',
+    'Our YouTube channel is called Daily Dev and we ask people to subscribe.',
+    'Thanks for watching the demo, any questions?',
+    'The channel is called LangChain Academy.',
+  ]
+  for (const sentence of legit) {
+    assert(
+      filterWhisperMarkers(sentence) === sentence,
+      `Genuine speech is preserved verbatim: "${sentence}"`
+    )
+  }
 
   // ---------------------------------------------------------------------------
   // [Group 2/5] Technical Vocabulary & Prompt Builder

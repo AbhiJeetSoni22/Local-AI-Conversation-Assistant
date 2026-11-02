@@ -39,6 +39,9 @@ export class TranscriptionQueue {
   private isProcessing = false
   private activeSessionId = ''
   private options: Required<TranscriptionQueueOptions>
+  /** Keys (sessionId:chunkIndex) already accepted, so a re-submitted chunk is never transcribed twice. */
+  private acceptedKeys = new Set<string>()
+  private droppedCount = 0
 
   constructor(options: TranscriptionQueueOptions) {
     this.options = {
@@ -55,6 +58,10 @@ export class TranscriptionQueue {
    * Chunks belonging to earlier session IDs will be discarded.
    */
   public setActiveSession(sessionId: string): void {
+    if (sessionId !== this.activeSessionId) {
+      this.acceptedKeys.clear()
+      this.droppedCount = 0
+    }
     this.activeSessionId = sessionId
     // Clear out any pending chunks from an older session
     this.queue = this.queue.filter((chunk) => chunk.sessionId === sessionId)
@@ -70,21 +77,30 @@ export class TranscriptionQueue {
       return
     }
 
+    // Duplicate prevention: the same (session, chunk) is accepted at most once.
+    const key = `${chunk.sessionId}:${chunk.chunkIndex}`
+    if (this.acceptedKeys.has(key)) {
+      return
+    }
+
     // Skip silent chunks if Whisper doesn't need to transcribe pure silence
     if (chunk.isSilent && !chunk.isFinal) {
       return
     }
+    this.acceptedKeys.add(key)
 
     // Backpressure enforcement: If queue exceeds max depth, drop oldest silent or non-final chunk
     if (this.queue.length >= this.options.maxQueueDepth) {
       const silentIndex = this.queue.findIndex((c) => c.isSilent && !c.isFinal)
       if (silentIndex !== -1) {
         this.queue.splice(silentIndex, 1)
+        this.droppedCount++
       } else {
         // Drop the oldest non-final chunk to keep memory bounded and prevent lag accumulation
         const dropIndex = this.queue.findIndex((c) => !c.isFinal)
         if (dropIndex !== -1) {
           this.queue.splice(dropIndex, 1)
+          this.droppedCount++
         }
       }
     }
@@ -181,6 +197,11 @@ export class TranscriptionQueue {
       pendingCount: this.queue.length,
       isProcessing: this.isProcessing,
     })
+  }
+
+  /** Number of queued chunks discarded by backpressure in the current session (diagnostics). */
+  public getDroppedCount(): number {
+    return this.droppedCount
   }
 
   public getPendingCount(): number {

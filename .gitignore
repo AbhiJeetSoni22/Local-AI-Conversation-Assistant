@@ -33,3 +33,6 @@ models/
 samples/*.wav
 temp_whisper_test/
 test_output/
+
+# Local diagnostic fixtures (contain audio / transcripts)
+samples/diagnostics/

@@ -274,109 +274,31 @@ This document catalogs all automated and manual verification procedures for the 
 
 ---
 
-### Test 1.8: Transcription Accuracy, Hallucination Suppression & Answer Relevance Suite (Phase 4 Tuning)
-- **Purpose:** Executes 44 unit and integration assertions covering:
-  1. Internal Whisper marker filtering (`[BLANK_AUDIO]`, `[MUSIC]`, `(applause)`) and YouTube boilerplate hallucination stripping.
-  2. Technical vocabulary initial prompt generation (`DEFAULT_TECHNICAL_VOCABULARY`, bounds, overrides).
-  3. Service-level configuration and flags (`noFallback: true` [`-nf`], `noSpeechThreshold: 0.60` [`-nth`]).
-  4. End-to-end comparative speech recognition & silence handling:
-     - Pure silence WAV verification (proves zero hallucinations).
-     - "I would like to know about LangChain."
-     - "Explain what LangChain is."
-     - "What is a vector database?"
-     - Non-technical control sentence: "There is a link chain on the wall." (verifies zero false positives).
-  5. Speech-aware PromptBuilder formatting and Ollama answer relevance on spoken transcripts.
-- **Command:**
-  ```powershell
-  npm run test:accuracy
-  ```
-- **Expected Result:** All 44 assertions pass with 0 failures; exit code 0.
-- **Actual Result (Executed Nov 1, 2026):**
-  ```text
-  =====================================================
-     Transcription Accuracy & Relevance Test Suite
-  =====================================================
+### Test 1.8: Output Cleaning & Accuracy Suite (`npm run test:accuracy`)
+- **Purpose:** Marker filtering, preservation of genuine speech, optional vocabulary-prompt builder, service configuration cleanliness, and (only when `bin/whisper-cli.exe` + model exist) live recognition checks.
+- **Last executed result (Linux sandbox, no Whisper binary/Ollama):** `29 / 29 passed`; live Whisper and live Ollama sections **skipped**, not passed.
+- **Changed in the transcription-regression fix:** the old assertions that a regex list *deletes* "the channel is called ...", "thanks for watching" etc. were replaced by assertions that such genuine sentences are **preserved**. Earlier text in this document claiming `-nf`, `-sns`, `-nth` are "enabled by default" was stale: those flags are not passed (see `buildWhisperCliArgs`).
 
-  [Group 1/5] Internal Marker & Silence Hallucination Filtering
-    ✅ PASS: Standalone [BLANK_AUDIO] filters to empty string
-    ✅ PASS: Whitespace-padded [BLANK_AUDIO] filters to empty string
-    ✅ PASS: Repeated [BLANK_AUDIO] tokens filter to empty string
-    ✅ PASS: Trailing [BLANK_AUDIO] stripped without altering valid speech
-    ✅ PASS: Leading [BLANK_AUDIO] stripped without altering valid speech
-    ✅ PASS: Acoustic markers ([MUSIC], (applause)) stripped from mid-sentence
-    ✅ PASS: Pure non-speech tokens filter to empty string
-    ✅ PASS: Genuine speech without markers is preserved verbatim
-    ✅ PASS: Filters YouTube channel and subscription boilerplate completely
-    ✅ PASS: Strips YouTube outro hallucinations from mixed speech
-    ✅ PASS: Filters outro "Thank you for watching / subscribe" boilerplate to empty
+### Test 1.9: Transcription Pipeline Regression Suite (`npm run test:pipeline`)
+- **Purpose:** 119 deterministic assertions with synthetic audio and a fake `whisper-cli` executable (no model, no microphone). Groups: (1) streaming resampler block-size invariance, exact length at 48/44.1/32/22.05/8 kHz, 1 kHz pitch, SDR > 60 dB, alias rejection, no block-edge discontinuities; (2) WAV header/round-trip/clipping/silence/validator; (3) segmenter: silence, room noise above the old 0.005 gate, clicks, single and multiple utterances, 0.4 s intra-sentence pause, click after speech, 30 s continuous speech split into bounded segments with no lost/duplicated audio, split lands in a quiet gap; (4) pipeline: chunk indexing, final chunk exactly once, no overlap duplication in fixed mode, pure noise sends nothing; (5) queue: sequential order, duplicate prevention, stale-session discard, bounded backpressure with final chunk protected, error recovery; (6) transcript accumulation: ordering, duplicates, genuine repetition preserved; (7) marker cleaning, genuine speech preserved, loop-guard thresholds incl. the observed "bye" x14 case; (8) `WhisperService` via fake CLI: exact CLI arguments (no decoder flags, `--prompt` only when configured), raw vs cleaned, `[BLANK_AUDIO]`, non-zero exit, malformed JSON, missing output, hang/timeout kill, recovery after each failure, logging policy (nothing logged by default; metadata only with `DEBUG_AUDIO=1`; text only with `DEBUG_WHISPER_TEXT=1` too); (9) synthetic stream -> pipeline -> queue -> fake Whisper -> accumulated transcript.
+- **Platform note:** Group 8 and 9's fake-CLI portion need a POSIX executable and print a skip notice on Windows.
+- **Last executed result:** `119 / 119 passed` (Linux sandbox).
+- **What this does NOT prove:** real Whisper accuracy or real microphone behaviour. The synthetic "speech" is harmonic tones, not speech.
 
-  [Group 2/5] Vocabulary & Initial Prompt Configuration
-    ✅ PASS: Core vocabulary includes "LangChain" ... "TypeScript"
-    ✅ PASS: Default prompt contains core technical keywords
-    ✅ PASS: Default prompt length is within safe context bounds (73 chars < 800)
-    ✅ PASS: Disabled option yields empty prompt
-    ✅ PASS: Direct customPrompt override is respected
-    ✅ PASS: Extra vocabulary terms appended correctly
+### Test 1.10: Resampler Fidelity Experiment (`npm run analyze:resampler`)
+- Feeds 10 s tones in 128-sample blocks to the legacy per-block resampler (verbatim copy) and the new one. Recorded result:
 
-  [Group 3/5] Whisper Service Configuration & Hallucination Prevention Flags
-    ✅ PASS: WhisperService has noFallback enabled by default (-nf)
-    ✅ PASS: WhisperService sets noSpeechThreshold to 0.60 by default (-nth)
-    ✅ PASS: WhisperService enables non-speech token suppression (-sns) by default
-    ✅ PASS: WhisperService initializes with concise technical initial prompt
+| Rate | Implementation | Samples (expected 160000) | 1 kHz tone | SDR | 10 kHz tone leaking into output |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 48 kHz | legacy | 161250 (+0.78 %) | 992.25 Hz | 25.8 dB | -12.5 dB |
+| 48 kHz | current | 160000 | 1000.00 Hz | 111.0 dB | -44.9 dB |
+| 44.1 kHz | legacy | 158485 (-0.95 %) | 1009.55 Hz | 12.0 dB | -7.1 dB |
+| 44.1 kHz | current | 160000 | 1000.00 Hz | 111.0 dB | -48.6 dB |
 
-  [Group 4/5] End-to-End Transcription Accuracy & Silence Handling
-    ✅ PASS: Silence audio produced silent/empty result: ""
-    ✅ PASS: Silence audio did not hallucinate YouTube boilerplate
-    --- Test: Technical proper noun "LangChain" recognition ---
-    Spoken:      "I would like to know about LangChain."
-    Transcribed: "I would like to know about LangChain." (3673ms)
-    ✅ PASS: Recognized "LangChain" in "I would like to know about LangChain."
-    ✅ PASS: Proper noun "LangChain" recognized with exact CamelCase
-    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
-
-    --- Test: Question phrasing "Explain what LangChain is" ---
-    Spoken:      "Explain what LangChain is."
-    Transcribed: "Explain what LangChain is." (3496ms)
-    ✅ PASS: Recognized "LangChain" in "Explain what LangChain is."
-    ✅ PASS: Proper noun "LangChain" recognized with exact CamelCase
-    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
-
-    --- Test: Domain concept "vector database" ---
-    Spoken:      "What is a vector database?"
-    Transcribed: "What is a vector database?" (3574ms)
-    ✅ PASS: Recognized "vector database" in "What is a vector database?"
-    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
-
-    --- Test: Control sentence: "link chain" MUST NOT falsely become "LangChain" ---
-    Spoken:      "There is a link chain on the wall."
-    Transcribed: "There is a link chain on the wall." (3432ms)
-    ✅ PASS: Recognized "link chain" in "There is a link chain on the wall."
-    ✅ PASS: False positive guard: does not convert "link chain" to "LangChain"
-    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
-
-  [Group 5/5] Speech-Aware Prompt Builder & Ollama Answer Relevance
-    ✅ PASS: System prompt explicitly acknowledges speech-to-text transcript context
-    ✅ PASS: System prompt explicitly guides domain knowledge for LangChain
-    ✅ PASS: System prompt removes the overly restrictive prohibition against external domain knowledge
-    Testing Ollama response on speech transcript: "I would like to know about LangChain."...
-    Ollama Response (678ms):
-    "Sure, what aspect of LangChain would you like to know more about? It's an open-source library for building AI applications."
-    ✅ PASS: Ollama correctly explains what LangChain is (framework/library for LLMs)
-    ✅ PASS: Ollama gives direct answer without stray YouTube or subscription noise
-
-  =====================================================
-  Test Results: 44 / 44 passed (0 failed)
-  =====================================================
-  ```
-- **Status:** `Verified`
-
-  =====================================================
-  Accuracy Test Results: 47 / 47 passed (0 failed)
-  =====================================================
-  ```
-- **Status:** `Verified`
-
----
+### Test 1.11: Real-Whisper A/B Harness (`npm run diagnose:whisper`) - REQUIRES YOUR WINDOWS MACHINE
+- Probes `whisper-cli -h` for the flags the app uses, then runs every WAV in `samples/diagnostics/` under four configurations (current default, explicit no prompt, `LangChain.` prompt, vocabulary prompt) and prints raw vs cleaned text, word-error-rate (when a matching `.txt` holds the expected text) and hallucinated-output counts for empty-reference fixtures. Full output is written to `test_output/` (git-ignored; contains transcript text).
+- Fixtures: `powershell -ExecutionPolicy Bypass -File scripts\make-speech-fixtures.ps1` (Windows SAPI voice: LangChain sentences, plain English, "link chain", short-then-silence, long-with-pauses) and `npm run diagnose:whisper -- --make-nonspeech` (silence, room noise at RMS 0.006, click). Also record the same sentences with your own microphone into the same folder: TTS audio is cleaner than a real microphone.
+- **Status: NOT yet executed against a real binary.** Harness plumbing was smoke-tested with a fake CLI only.
 
 ## 2. Manual Desktop Verification Tests
 
@@ -458,3 +380,21 @@ This document catalogs all automated and manual verification procedures for the 
 | **Technical Vocabulary & Accuracy** | Accuracy Test (47 assertions) | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
 | **Whisper Marker Filtering** | Unit Test | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
 | **Live Mic Hardware Verification**| Manual System Test | No | Interactive Windows Desktop | ⏳ `Pending User Hardware Test` |
+
+
+---
+
+## 3. Manual Windows Verification Checklist (hardware required; none of these are marked done)
+
+| # | Step | Expected | Result |
+| :-- | :--- | :--- | :--- |
+| 1 | `npm run diagnose:whisper` with the fixtures above | Flag probe all required flags present; no loops; `hallucinated-on-empty = 0` for config A | ☐ not run |
+| 2 | `npm run dev`, DevTools console: `localStorage.setItem('DEBUG_AUDIO','1')`, then Start. Console shows `capture settings:` | Note `contextSampleRate` (44100/48000) and whether `noiseSuppression`/`autoGainControl` are true | ☐ not run |
+| 3 | Say "I would like to know about LangChain." then wait 1 s, click Stop | One chunk (`mode: speech`, `reason: pause`), duration about speech length + <= 0.55 s, no extra chunks | ☐ not run |
+| 4 | Start, stay silent 20 s, Stop | Zero chunks in the console, empty transcript | ☐ not run |
+| 5 | Start, say a short sentence, then click Stop immediately and also try 3 s of silence before Stop | No invented trailing text | ☐ not run |
+| 6 | Speak two sentences with a 1.5 s pause | Two chunks, in order, no duplicate text | ☐ not run |
+| 7 | Say "yes ... yes" with a pause between | Both "yes" appear | ☐ not run |
+| 8 | Click Suggest Answer immediately after Stop | Button disabled/hint shown until last audio is transcribed | ☐ not run |
+| 9 | Suggest Answer on the LangChain question | Answer explains LangChain; no talk of channels/subscriptions | ☐ not run (needs Ollama + qwen2.5:3b) |
+| 10 | A/B: set `audioConstraints` `noiseSuppression:false, autoGainControl:false` in `App.tsx`, repeat step 3 | Record whether accuracy changes | ☐ not run |

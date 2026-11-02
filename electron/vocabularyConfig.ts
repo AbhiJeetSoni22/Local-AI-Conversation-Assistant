@@ -2,9 +2,13 @@
  * Vocabulary & Initial Prompt Configuration for Whisper STT
  *
  * Provides a curated list of technical vocabulary to condition Whisper's
- * decoder context, improving speech recognition accuracy for technical
- * proper nouns and domain terminology without modifying acoustic models.
- * Also provides robust filtering for Whisper acoustic markers and silence hallucinations.
+ * decoder context. The prompt is an OPTIONAL experiment and is OFF by default
+ * (see getWhisperConfig / WHISPER_USE_VOCAB_PROMPT): a prompt is injected into the only decode
+ * window of every chunk, so a poor prompt biases every chunk. Enable it only after measuring
+ * (npm run diagnose:whisper).
+ *
+ * Also provides non-destructive cleaning of Whisper output: internal annotation markers are
+ * stripped and a decoder repetition loop is trimmed. Spoken content is never rewritten or replaced.
  */
 
 export const DEFAULT_TECHNICAL_VOCABULARY: readonly string[] = [
@@ -17,39 +21,128 @@ export const DEFAULT_TECHNICAL_VOCABULARY: readonly string[] = [
 ] as const
 
 /**
- * Regex matching internal Whisper non-speech acoustic tokens, special markers,
- * and bracketed annotations (e.g. [BLANK_AUDIO], [MUSIC], [APPLAUSE], (applause)).
+ * Non-speech annotations that whisper.cpp / Whisper emit instead of words. Spoken words are never wrapped
+ * in square brackets by the decoder, so any short [bracketed] span is an annotation ([BLANK_AUDIO],
+ * [ Silence ], [MUSIC], [inaudible] ...). Parenthesised spans are only removed when they describe a
+ * sound ((applause), (whirring), (door closes)), so real parenthetical speech is left alone.
  */
-export const WHISPER_INTERNAL_MARKER_REGEX =
-  /\[(BLANK_AUDIO|MUSIC|APPLAUSE|LAUGHTER|LAUGHS|NOISE|SILENCE|WHISPERING|COUGH|COUGHS|SNORT|BELLS?|BEEP|SIGH|GASP|YAWN|THUNDER|SCREAM|CHEERING|GROAN|SINGING|INAUDIBLE|SOBBING|UNKNOWN)\]|\((applause|laughter|music|silence|cheering|coughs?|gasp|sigh|whispering|bell rings?)\)/gi
+const SOUND_WORDS =
+  'music|noise|silence|silent|applause|laugh|laughs|laughter|laughing|cough|coughs|coughing|sigh|sighs|' +
+  'gasp|beep|beeps|click|clicks|clicking|whirr|whirring|whir|static|wind|typing|crowd|cheer|cheering|bell|bells|' +
+  'rustl|sniff|breath|breathing|inaudible|unintelligible|blank|speaking in|foreign language|door|footsteps|' +
+  'engine|thunder|scream|groan|sob|sobbing|whisper|whispering|snort|yawn|singing|ringing|buzz|hum|humming|sound'
+
+export const WHISPER_INTERNAL_MARKER_REGEX = new RegExp(
+  '\\[[^\\]\\n]{0,60}\\]' + // [BLANK_AUDIO], [ Silence ], [MUSIC] ...
+    '|' +
+    '\\((?=[^)\\n]{0,60}\\))[^)\\n]*\\b(?:' + SOUND_WORDS + ')[^)\\n]*\\)' + // (applause), (whirring) ...
+    '|' +
+    '[\\u266A\\u266B\\u266C]+', // musical notes
+  'gi'
+)
 
 /**
- * Regex patterns matching common Whisper hallucinations triggered by silence,
- * background hiss, or YouTube training corpus boilerplate.
+ * Removes Whisper's non-speech annotations. Does not touch spoken words.
+ *
+ * Examples:
+ * - "[BLANK_AUDIO]" -> ""
+ * - "I like LangChain [BLANK_AUDIO]" -> "I like LangChain"
+ * - "[MUSIC] Hello world (applause)" -> "Hello world"
+ * - "Is the customer happy?" -> "Is the customer happy?"   (unchanged)
  */
-export const WHISPER_HALLUCINATION_PATTERNS: readonly RegExp[] = [
-  /The channel is called\s+[^.!?]+[.!?]?/gi,
-  /and if you subscribe[^.!?]*[.!?]?/gi,
-  /Importance and the Rule of[^.!?]*[.!?]?/gi,
-  /please (like and )?subscribe[^.!?]*[.!?]?/gi,
-  /thank you for watching[^.!?]*[.!?]?/gi,
-  /thanks for watching[^.!?]*[.!?]?/gi,
-  /like,? share,? and subscribe[^.!?]*[.!?]?/gi,
-  /don't forget to (like and )?subscribe[^.!?]*[.!?]?/gi,
-  /\bhappy\?\s*$/gi,
-]
-
-/**
- * Filters out common YouTube boilerplate hallucinations that Whisper decoders
- * produce when processing low-confidence or silent trailing audio.
- */
-export function filterHallucinations(text: string): string {
+export function filterWhisperMarkers(text: string): string {
   if (!text) return ''
-  let cleaned = text
-  for (const pattern of WHISPER_HALLUCINATION_PATTERNS) {
-    cleaned = cleaned.replace(pattern, ' ')
+  return text.replace(WHISPER_INTERNAL_MARKER_REGEX, ' ').replace(/\s+/g, ' ').trim()
+}
+
+export interface RepetitionGuardOptions {
+  /** A single word repeated this many times in a row is treated as a decoder loop (default 8). */
+  maxIdenticalWords?: number
+  /** A phrase of 2-4 words repeated this many times in a row is treated as a decoder loop (default 5). */
+  maxPhraseRepeats?: number
+}
+
+export interface RepetitionGuardResult {
+  text: string
+  /** True if a degenerate loop was detected and trimmed. */
+  trimmed: boolean
+  /** Number of words removed (diagnostics). */
+  removedWords: number
+}
+
+function normalizeWord(w: string): string {
+  return w.toLowerCase().replace(/^[^\p{L}\p{N}']+|[^\p{L}\p{N}']+$/gu, '')
+}
+
+/**
+ * Trims a decoder repetition loop ("bye bye bye bye bye bye bye bye bye ...") down to ONE occurrence
+ * of the looping unit. Greedy decoders can fall into such loops on weak audio; people do not say one
+ * word eight times in a row. Thresholds are deliberately high so ordinary emphasis ("no no no no") and
+ * counting are untouched, and only the loop itself is trimmed - text before and after is preserved.
+ */
+export function trimRepetitionLoops(text: string, options: RepetitionGuardOptions = {}): RepetitionGuardResult {
+  const maxWords = options.maxIdenticalWords ?? 8
+  const maxPhrase = options.maxPhraseRepeats ?? 5
+  const words = text.split(/\s+/).filter(Boolean)
+  const norm = words.map(normalizeWord)
+  const keep: boolean[] = new Array(words.length).fill(true)
+  let removed = 0
+
+  // Single-word loops
+  for (let i = 0; i < words.length; ) {
+    if (!norm[i]) { i++; continue }
+    let j = i + 1
+    while (j < words.length && norm[j] === norm[i]) j++
+    const run = j - i
+    if (run >= maxWords) {
+      for (let k = i + 1; k < j; k++) keep[k] = false
+      removed += run - 1
+    }
+    i = j
   }
-  return cleaned.replace(/\s+/g, ' ').trim()
+
+  // Phrase loops (unit length 2..4)
+  for (let unit = 2; unit <= 4; unit++) {
+    for (let i = 0; i + unit * maxPhrase <= words.length; ) {
+      if (!keep[i]) { i++; continue }
+      const unitKey = norm.slice(i, i + unit).join(' ')
+      if (!unitKey.trim()) { i++; continue }
+      let reps = 1
+      let j = i + unit
+      while (j + unit <= words.length && norm.slice(j, j + unit).join(' ') === unitKey) { reps++; j += unit }
+      if (reps >= maxPhrase) {
+        for (let k = i + unit; k < j; k++) { if (keep[k]) { keep[k] = false; removed++ } }
+        i = j
+      } else {
+        i++
+      }
+    }
+  }
+
+  if (removed === 0) return { text, trimmed: false, removedWords: 0 }
+  return { text: words.filter((_, idx) => keep[idx]).join(' '), trimmed: true, removedWords: removed }
+}
+
+export interface CleanedWhisperOutput {
+  /** Exactly what Whisper returned (diagnostics only; never shown or logged by default). */
+  raw: string
+  /** User-facing text: annotations stripped, decoder loops trimmed. */
+  text: string
+  markersRemoved: boolean
+  loopTrimmed: boolean
+}
+
+/** Single entry point used by WhisperService. Keeps raw and cleaned text separate. */
+export function cleanWhisperOutput(raw: string): CleanedWhisperOutput {
+  const rawText = raw ?? ''
+  const noMarkers = filterWhisperMarkers(rawText)
+  const guarded = trimRepetitionLoops(noMarkers)
+  return {
+    raw: rawText,
+    text: guarded.text,
+    markersRemoved: noMarkers !== rawText.replace(/\s+/g, ' ').trim(),
+    loopTrimmed: guarded.trimmed,
+  }
 }
 
 /**
@@ -120,27 +213,4 @@ export function buildInitialPrompt(options?: {
   }
 
   return prompt
-}
-
-/**
- * Filters internal Whisper tokens, acoustic annotations, and silence hallucinations
- * from transcribed text. Leaves genuine spoken speech completely intact.
- *
- * Examples:
- * - "[BLANK_AUDIO]" -> ""
- * - "I like LangChain [BLANK_AUDIO]" -> "I like LangChain"
- * - "[MUSIC] Hello world (applause)" -> "Hello world"
- * - "Hello The channel is called LANGCHAIN and if you subscribe it's a..." -> "Hello"
- */
-export function filterWhisperMarkers(text: string): string {
-  if (!text) return ''
-
-  // 1. Remove internal acoustic markers like [BLANK_AUDIO], (applause)
-  let cleaned = text.replace(WHISPER_INTERNAL_MARKER_REGEX, ' ')
-
-  // 2. Remove known silence/low-confidence YouTube boilerplate hallucinations
-  cleaned = filterHallucinations(cleaned)
-
-  // 3. Normalize whitespace
-  return cleaned.replace(/\s+/g, ' ').trim()
 }

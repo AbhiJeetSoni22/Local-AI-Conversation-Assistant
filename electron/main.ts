@@ -106,10 +106,11 @@ ipcMain.handle('whisper:transcribe-chunk', async (_event, payload: {
     const result = await whisperService.transcribe(buffer)
     const cleanedText = result.text.trim()
 
-    if (process.env.DEBUG_AUDIO === '1' || process.env.NODE_ENV !== 'production') {
+    // Metadata only (never transcript text) and only when explicitly enabled.
+    if (process.env.DEBUG_AUDIO === '1') {
       console.log(
-        `[IPC Audio] Chunk #${chunkIndex} (${buffer.length} bytes, session=${sessionId}): ` +
-        `silent=${result.isSilent}, transcribed="${cleanedText}" (${result.durationMs}ms)`
+        `[IPC Audio] chunk #${chunkIndex} (${buffer.length} bytes, session=${sessionId}): ` +
+        `silent=${result.isSilent}, chars=${cleanedText.length}, loopTrimmed=${Boolean(result.loopTrimmed)}, ${result.durationMs}ms`
       )
     }
 
@@ -181,6 +182,11 @@ ipcMain.handle('ollama:cancel-generation', async () => {
 
 app.whenReady().then(async () => {
   createWindow()
+
+  if (process.env.DEBUG_AUDIO === '1') {
+    // Exact decoder configuration in effect (no audio, no transcript). Compare with docs when diagnosing.
+    console.log('[Whisper config]', JSON.stringify(whisperService.describeEffectiveConfig()))
+  }
 
   if (process.env.TEST_LAUNCH === '1') {
     setTimeout(() => {

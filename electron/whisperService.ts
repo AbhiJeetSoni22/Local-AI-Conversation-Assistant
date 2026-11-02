@@ -5,16 +5,27 @@ import os from 'node:os'
 import {
   getWhisperConfig,
   validateWhisperEnvironment,
+  buildWhisperCliArgs,
   WhisperConfig,
   WhisperEnvValidation,
 } from './whisperConfig'
 import { validateWavFile, validateWavBuffer } from './wavValidator'
-import { filterWhisperMarkers } from './vocabularyConfig'
+import { cleanWhisperOutput } from './vocabularyConfig'
 
-export { filterWhisperMarkers } from './vocabularyConfig'
+export { filterWhisperMarkers, cleanWhisperOutput } from './vocabularyConfig'
+
+/** Metadata-only diagnostics (durations, flags, lengths). Enabled with DEBUG_AUDIO=1. */
+const debugMeta = (): boolean => process.env.DEBUG_AUDIO === '1'
+/** Transcript text in logs is sensitive; requires an additional explicit opt-in. */
+const debugText = (): boolean => process.env.DEBUG_AUDIO === '1' && process.env.DEBUG_WHISPER_TEXT === '1'
 
 export interface TranscriptionResult {
+  /** User-facing text: Whisper annotations stripped, decoder loops trimmed. */
   text: string
+  /** Exactly what Whisper returned. Diagnostics only: never sent to the UI, never logged by default. */
+  rawText?: string
+  /** True if a degenerate repetition loop was trimmed from this result. */
+  loopTrimmed?: boolean
   durationMs: number
   isSilent?: boolean
   modelUsed: string
@@ -211,15 +222,10 @@ export class WhisperService {
   ): Promise<TranscriptionResult> {
     const timeoutMs = options.timeoutMs ?? 30000
 
-    // Step 1: Check environment readiness
-    const env = validateWhisperEnvironment(this.config)
-    if (!env.valid) {
-      throw new Error(`Whisper cannot transcribe: ${env.error}`)
-    }
-
-    // Step 2: Validate input audio
+    // Step 1: Validate input audio first. Invalid/silent audio is decided without needing Whisper at all.
     let audioFilePath: string
     let isTempFile = false
+    let tempBuffer: Buffer | null = null
 
     if (typeof audioInput === 'string') {
       audioFilePath = audioInput
@@ -250,9 +256,20 @@ export class WhisperService {
           engine: this.config.engine,
         }
       }
+      tempBuffer = audioInput
+      audioFilePath = ''
+    }
+
+    // Step 2: Check environment readiness
+    const env = validateWhisperEnvironment(this.config)
+    if (!env.valid) {
+      throw new Error(`Whisper cannot transcribe: ${env.error}`)
+    }
+
+    if (tempBuffer) {
       // Write buffer to temporary file for whisper.cpp consumption
       audioFilePath = path.join(os.tmpdir(), `whisper_in_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`)
-      fs.writeFileSync(audioFilePath, audioInput)
+      fs.writeFileSync(audioFilePath, tempBuffer)
       isTempFile = true
     }
 
@@ -286,18 +303,7 @@ export class WhisperService {
     const outputPrefix = path.join(tempOutputDir, fileId)
     const expectedJsonFile = `${outputPrefix}.json`
 
-    const args = [
-      '-m', this.config.modelPath,
-      '-f', audioFilePath,
-      '-oj', // Output JSON
-      '-of', outputPrefix,
-      '-t', String(this.config.threads),
-      '-np', // Do not print anything other than results
-    ]
-
-    if (this.config.initialPrompt && this.config.initialPrompt.trim()) {
-      args.push('--prompt', this.config.initialPrompt.trim())
-    }
+    const args = buildWhisperCliArgs(this.config, audioFilePath, outputPrefix)
 
     return new Promise((resolve, reject) => {
       let settled = false
@@ -375,19 +381,15 @@ export class WhisperService {
                 rawText = parsed.text.trim()
               }
 
-              const cleanedText = filterWhisperMarkers(rawText)
-
-              if (process.env.DEBUG_AUDIO === '1' || process.env.NODE_ENV !== 'production') {
-                console.log(
-                  `[Whisper CLI] Transcribed in ${durationMs}ms: ` +
-                  `raw="${rawText}" -> cleaned="${cleanedText}"`
-                )
-              }
+              const cleaned = cleanWhisperOutput(rawText)
+              this.logResult('CLI', durationMs, cleaned.raw, cleaned.text, cleaned.loopTrimmed)
 
               resolve({
-                text: cleanedText,
+                text: cleaned.text,
+                rawText: cleaned.raw,
+                loopTrimmed: cleaned.loopTrimmed,
                 durationMs,
-                isSilent: cleanedText.length === 0,
+                isSilent: cleaned.text.length === 0,
                 modelUsed: path.basename(this.config.modelPath),
                 engine: 'cli',
               })
@@ -451,19 +453,16 @@ export class WhisperService {
 
       const json = await response.json()
       const rawText = typeof json.text === 'string' ? json.text.trim() : ''
-      const cleanedText = filterWhisperMarkers(rawText)
-
-      if (process.env.DEBUG_AUDIO === '1' || process.env.NODE_ENV !== 'production') {
-        console.log(
-          `[Whisper Server] Transcribed in ${Date.now() - startTime}ms: ` +
-          `raw="${rawText}" -> cleaned="${cleanedText}"`
-        )
-      }
+      const cleaned = cleanWhisperOutput(rawText)
+      const durationMs = Date.now() - startTime
+      this.logResult('Server', durationMs, cleaned.raw, cleaned.text, cleaned.loopTrimmed)
 
       return {
-        text: cleanedText,
-        durationMs: Date.now() - startTime,
-        isSilent: cleanedText.length === 0,
+        text: cleaned.text,
+        rawText: cleaned.raw,
+        loopTrimmed: cleaned.loopTrimmed,
+        durationMs,
+        isSilent: cleaned.text.length === 0,
         modelUsed: path.basename(this.config.modelPath),
         engine: 'server',
       }
@@ -473,6 +472,31 @@ export class WhisperService {
         throw new Error(`Whisper server request timed out after ${timeoutMs}ms.`)
       }
       throw err
+    }
+  }
+
+  /**
+   * Diagnostics. Default: silent. DEBUG_AUDIO=1 logs numbers/flags only. Transcript text (raw vs cleaned)
+   * is logged only when DEBUG_AUDIO=1 AND DEBUG_WHISPER_TEXT=1, because it is conversation content.
+   */
+  private logResult(engine: string, durationMs: number, raw: string, cleaned: string, loopTrimmed: boolean): void {
+    if (debugText()) {
+      console.log(`[Whisper ${engine}] ${durationMs}ms loopTrimmed=${loopTrimmed} raw="${raw}" -> cleaned="${cleaned}"`)
+    } else if (debugMeta()) {
+      console.log(`[Whisper ${engine}] ${durationMs}ms rawChars=${raw.length} cleanedChars=${cleaned.length} loopTrimmed=${loopTrimmed}`)
+    }
+  }
+
+  /** Effective, non-sensitive configuration for diagnostics (no audio, no transcript). */
+  public describeEffectiveConfig(): { engine: string; model: string; threads: number; promptChars: number; args: string[] } {
+    return {
+      engine: this.config.engine,
+      model: path.basename(this.config.modelPath),
+      threads: this.config.threads,
+      promptChars: this.config.initialPrompt?.trim().length ?? 0,
+      args: buildWhisperCliArgs(this.config, '<chunk.wav>', '<out-prefix>').map((a, i, arr) =>
+        arr[i - 1] === '--prompt' ? `<${a.length} chars>` : a
+      ),
     }
   }
 

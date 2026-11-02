@@ -14,7 +14,7 @@ graph TB
         UI["React UI (App.tsx)"]
         State["UI State Model<br/>(status, whisperStatus, ollamaStatus, isGenerating, isTranscribing)"]
         AudioRec["Audio Recorder (audioRecorder.ts)<br/>getUserMedia + AudioWorklet"]
-        Resampler["Audio Resampler & Downmixer (resampler.ts)<br/>Linear Interpolation to 16kHz Mono"]
+        Resampler["Audio Resampler & Downmixer (resampler.ts)<br/>Stateful windowed-sinc to 16kHz Mono"]
         WavEnc["WAV Encoder & Silence Gate (wavEncoder.ts)<br/>16-bit PCM RIFF Header + RMS"]
         TxQueue["Transcription Queue (transcriptionQueue.ts)<br/>Sequential FIFO + Session Capping"]
         BridgeClient["window.electronApi Client"]
@@ -157,8 +157,8 @@ The renderer represents the client presentation layer:
 - **`src/App.tsx`**: Main UI component containing the responsive grid layout, status indicators, action buttons, and panels.
 - **UI State Model**: Maintains execution status (`Idle`, `Listening`, `Stopped`, `Generating`), transcribing status (`isTranscribing`), component readiness (`Checking`, `Ready`, `Unavailable`), conversation transcript, and streaming answer state.
 - **User Actions**:
-  - `Start`: Requests microphone permissions, initializes `AudioRecorder`, and begins continuous 3-second audio chunking and live transcription.
-  - `Stop`: Halts audio capture, releases microphone hardware tracks, drains in-flight audio transcription queue, and transitions UI to `Stopped`.
+  - `Start`: Requests microphone permissions, initializes `AudioRecorder`, and begins pause-aligned utterance segmentation and live transcription.
+  - `Stop`: Halts audio capture, releases microphone hardware tracks, flushes the final utterance exactly once, and transitions UI to `Stopped`. The **Suggest Answer** button stays disabled until the transcription queue has finished the last audio (`transcriptionBusy`), so an answer is never generated from a truncated transcript.
   - `Suggest Answer`: Validates transcript and Ollama readiness, then triggers local streaming answer generation.
   - `Cancel Generation`: Aborts active Ollama inference stream mid-flight.
   - `Load Sample Meeting Transcript`: Populates transcript with conversation text for immediate testing.
@@ -166,13 +166,15 @@ The renderer represents the client presentation layer:
 - **Actionable Error Rendering**: When Whisper, Ollama, or Microphone access is unavailable, displays a highlighted guidance card instructing the user on exact manual setup steps.
 
 ### D. Audio Capture & Processing Pipeline (`src/audio/`)
-- **`audioRecorder.ts`**: Handles microphone acquisition via `navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })`. Employs an `AudioWorkletNode` (loaded dynamically via inline Blob URL) with fallback to `ScriptProcessorNode`. Accumulates samples in 3.0-second intervals (48,000 samples @ 16 kHz), and automatically flushes pending buffers >= 0.5s on stop.
-- **`resampler.ts`**: Pure DSP utilities for multi-channel downmixing (`downmixToMono`), linear interpolation with anti-aliasing low-pass filtering (`resampleTo16k`), and Root-Mean-Square energy calculation (`calculateRms`).
-- **`wavEncoder.ts`**: Encodes 16 kHz Float32 PCM arrays into standard 44-byte header 16-bit linear PCM (`pcm_s16le`) RIFF/WAVE buffers (`Uint8Array`). Evaluates RMS energy against silence threshold (`0.005`) to discard silent chunks before IPC transmission.
-- **`transcriptionQueue.ts`**: Strict FIFO sequential worker queue that prevents concurrent `whisper-cli.exe` invocations. Implements session ID validation (drops stale chunks from previous recordings) and queue depth backpressure capping (`maxQueueDepth = 3`) to prevent memory pressure when Whisper transcription duration exceeds audio window duration.
-- **`electron/vocabularyConfig.ts`**: Strips acoustic markers (`[BLANK_AUDIO]`, `[MUSIC]`, `(applause)`, `(whirring)`) and low-confidence YouTube boilerplate from output, while leaving genuine spoken speech intact. Optional initial prompt conditioning is configurable via `WHISPER_INITIAL_PROMPT`.
-
----
+- **`audioRecorder.ts`**: Browser plumbing only: `getUserMedia({ audio: { channelCount: 1, echoCancellation, noiseSuppression, autoGainControl } })` (all three default to `true`, overridable via `audioConstraints` for A/B tests), `AudioWorkletNode` via inline Blob URL with `ScriptProcessorNode` fallback, Start/Stop lifecycle. Delegates every signal-processing step to `ChunkPipeline`. `stop()` is idempotent, so Stop + device-unplug cannot submit the final chunk twice. Records numeric capture facts (`getDiagnostics()`: AudioContext rate and the DSP flags the browser actually applied).
+- **`chunkPipeline.ts`**: Pure, unit-tested pipeline: raw device-rate blocks -> `StreamingResampler` -> `SpeechSegmenter` (default `speech` mode) or the legacy fixed 3.0 s chunker (`fixed` mode) -> 16-bit WAV -> `AudioChunkPayload` (`sessionId`, monotonically increasing `chunkIndex`, `isFinal`). `finish()` returns the final chunk once; later calls return `[]`.
+- **`resampler.ts`**: `StreamingResampler` (stateful, windowed-sinc, integer-rational output positions, unity DC gain, cutoff just below the 8 kHz target Nyquist). It carries fractional phase and filter history across the 128-sample AudioWorklet blocks. The previous implementation resampled each block independently, which (measured by `npm run analyze:resampler`) stretched the timeline by +0.78 % at 48 kHz / -0.95 % at 44.1 kHz, mis-pitched tones, and aliased content above 8 kHz into the speech band. `resampleTo16k()` (whole buffers only) now uses the same algorithm; `downmixToMono`, `calculateRms` unchanged.
+- **`speechSegmenter.ts`**: Energy-based boundary finder (20 ms frames, adaptive noise floor, speech threshold `max(0.010, 3 x floor)`). A segment starts at speech onset with 300 ms pre-roll, ends after 700 ms of non-speech (trailing pad 250 ms), is split at the quietest point in the last second if it reaches 12 s (soft split on a 250 ms pause after 8 s), and is discarded if it contains < 200 ms of speech-level energy (clicks, bumps, breath). It is **not** a speech recogniser: it only gates and finds boundaries. Thresholds are options and must be validated on a real microphone.
+- **`wavEncoder.ts`**: Encodes 16 kHz Float32 PCM into a 44-byte-header 16-bit PCM RIFF/WAVE `Uint8Array` and reports whole-chunk RMS; chunks below RMS `0.005` are flagged silent and never sent.
+- **`transcriptionQueue.ts`**: Strict FIFO sequential worker (never two `whisper-cli.exe` at once). Session-ID validation drops stale chunks and stale in-flight results; **duplicate `(sessionId, chunkIndex)` submissions are ignored**; backpressure (`maxQueueDepth = 3`) drops the oldest non-final chunk, counts it (`getDroppedCount()`), and never drops the final chunk.
+- **`transcriptAccumulator.ts`**: `SegmentGate` accepts a segment only if it belongs to the active session and its `chunkIndex` is strictly greater than the last accepted one; `appendSegmentText` joins with single spaces and never drops words. This replaces a text-based `endsWith()` check that silently erased genuinely repeated speech.
+- **`electron/vocabularyConfig.ts`**: `cleanWhisperOutput(raw)` returns `{ raw, text, markersRemoved, loopTrimmed }`. (1) `filterWhisperMarkers` removes only non-speech annotations: any short `[bracketed]` span, parenthesised sound descriptions (`(applause)`, `(whirring)`), and music notes. (2) `trimRepetitionLoops` trims a decoder loop (a word repeated >= 8 times, or a 2-4 word phrase repeated >= 5 times) to one occurrence; ordinary emphasis ("no no no no no") is untouched. The former regex list that deleted phrases such as "the channel is called ...", "thanks for watching" and a trailing "happy?" was **removed** because it deleted genuine speech. `raw` is retained for diagnostics only and is never sent to the renderer or logged by default. The optional technical-vocabulary prompt is OFF by default (opt in with `WHISPER_USE_VOCAB_PROMPT=1`, or `WHISPER_INITIAL_PROMPT`).
+- **`electron/whisperConfig.ts`**: `buildWhisperCliArgs()` is the single source of the CLI argument vector: `-m <model> -f <wav> -oj -of <prefix> -t <threads> -np` plus `--prompt <text>` only when configured. No decoder flags (`-sns`, `-nf`, `-nth`, `-mc` ...) are passed; whisper.cpp defaults apply (temperature fallback on, no-speech threshold 0.6, entropy threshold 2.4, log-prob threshold -1.0).
 
 ## 4. Ollama LLM Service Architecture (`electron/ollamaService.ts`)
 
@@ -189,7 +191,7 @@ The local LLM integration provides zero-cloud, streaming text generation:
 - Treats conversation transcripts as untrusted context.
 - Bounds input length to 12,000 characters (truncates older conversation while preserving recent tail).
 - Demarcates input with strict delimiters (`--- BEGIN TRANSCRIPT ---` / `--- END TRANSCRIPT ---`).
-- Enforces strict system instructions: base response exclusively on the transcript, acknowledge incomplete context politely, and avoid fabricated facts.
+- System prompt treats the transcript as imperfect speech recognition: infer the most plausible question, answer a reasonably clear question directly and concisely without repeating garbled fragments or asking needless follow-ups, state a corrected-term assumption briefly ("Assuming you mean LangChain, ..."), ask exactly one short clarifying question only when genuinely ambiguous, never fabricate facts. It contains no rule tailored to specific transcription artefacts, so it cannot mask transcription faults.
 
 ### 3. Streaming Chat Engine & Cancellation (`electron/ollamaService.ts`)
 - Communicates with Ollama's native endpoint: `POST /api/chat` with `{ stream: true }`.
@@ -244,14 +246,14 @@ sequenceDiagram
     User->>UI: Clicks "Start"
     UI->>Rec: start(onChunk)
     Rec->>Rec: getUserMedia({ audio: true })
-    Rec->>Rec: AudioContext + AudioWorklet (16 kHz resample)
-    Note over Rec: Accumulates 3.0s window (48,000 samples)
+    Rec->>Rec: AudioContext + AudioWorklet (128-sample blocks)
+    Note over Rec: ChunkPipeline: StreamingResampler -> SpeechSegmenter
 
-    loop Every 3.0 Seconds of Audio
-        Rec->>Rec: encodeWav16kMono(samples)
-        alt Chunk is Silent (RMS < 0.005)
-            Note over Rec: Discard silent chunk locally
-        else Chunk contains Speech
+    loop Each completed utterance (pause >= 700 ms, or <= 12 s)
+        Rec->>Rec: encodeWav16kMono(utterance samples)
+        alt Segment has < 200 ms of speech-level energy
+            Note over Rec: Never emitted (click / noise / silence)
+        else Segment contains speech
             Rec->>Queue: enqueue(wavBytes)
             Queue->>UI: onStateChange(isTranscribing: true)
             Queue->>Preload: transcribeAudioChunk(wavBytes)
@@ -268,18 +270,19 @@ sequenceDiagram
 
     User->>UI: Clicks "Stop"
     UI->>Rec: stop()
-    Rec->>Rec: Flush final chunk if >= 0.5s (8,000 samples)
+    Rec->>Rec: finish(): flush open utterance once (isFinal)
     Rec->>Rec: Release MediaStream tracks & close AudioContext
-    UI->>Queue: drain() (finish in-flight chunk)
-    Queue->>UI: onStateChange(isTranscribing: false)
+    Queue->>UI: onStatusChange(isProcessing / pendingCount)
+    Note over UI: Suggest Answer enabled only when queue is idle
     UI->>UI: setStatus('Stopped')
 ```
 
 ### Audio Architecture Highlights:
-1. **Inline AudioWorklet**: AudioWorklet processor code is packaged into an inline `Blob` URL so it loads consistently across both development Vite HMR and packaged `file://` protocols, with graceful degradation to `ScriptProcessorNode` if unsupported.
-2. **Client-Side Silence Rejection**: Evaluating RMS energy in `wavEncoder.ts` prior to IPC invocation prevents spawning native processes when the user is not speaking, drastically cutting CPU overhead.
-3. **Non-Overlapping Chunks**: Audio chunks are partitioned into distinct 3.0-second non-overlapping windows to avoid duplicate words in the live transcript.
-4. **Sequential Processing & Backpressure**: `TranscriptionQueue` processes one chunk at a time, enforcing an absolute ceiling (`maxQueueDepth = 3`). If Whisper inference takes longer than real-time on lower-power CPUs, older pending chunks are safely dropped to prevent latency accumulation and memory growth.
-5. **Session Isolation**: Each recording cycle is assigned a unique `sessionId`. When the user clicks "Stop" and "Start" again, all queued chunks from superseded sessions are rejected immediately without executing Whisper.
-6. **Technical Vocabulary Initial Prompt**: `vocabularyConfig.ts` supplies a curated technical vocabulary context passed via `--prompt` to `whisper-cli.exe`, dramatically improving proper noun recognition (e.g., `LangChain`, `LLM`, `RAG`, `React`, `TypeScript`) while preserving non-technical words (`link chain`) in normal contexts.
-7. **Whisper Marker Suppression & Filtering**: Non-speech acoustic markers (e.g., `[BLANK_AUDIO]`, `[MUSIC]`, `[SILENCE]`, `(applause)`) are filtered cleanly from user-facing text before IPC dispatch, and non-speech tokens are suppressed natively via the `-sns` flag.
+1. **Inline AudioWorklet**: Worklet code is packaged into an inline `Blob` URL so it loads in Vite dev and packaged `file://` modes, with graceful fallback to `ScriptProcessorNode`.
+2. **One stateful resampler per recording**: filter history and fractional output position persist across blocks (see `resampler.ts` above).
+3. **Utterance segmentation instead of blind 3.0 s cuts**: cuts fall in pauses, so words are not split, and non-speech (room noise, breath, the click on "Stop", trailing silence) is not sent to Whisper, removing the main opportunity for it to invent filler. There is **no overlap** between segments, therefore no overlap-deduplication logic exists or is needed. `segmentation: 'fixed'` restores the old behaviour for A/B comparison.
+4. **Sequential Processing & Backpressure**: one chunk at a time; ceiling `maxQueueDepth = 3`; drops are counted; final chunk protected.
+5. **Session Isolation & identity-based de-duplication**: unique `sessionId` per recording; queue ignores duplicate `(session, chunk)`; `SegmentGate` ignores late/out-of-order/foreign-session results.
+6. **Context never leaks between chunks**: each chunk is a separate `whisper-cli` process, and whisper.cpp's `no_context` default is true, so no decoded text is carried from one chunk to the next. Repetition inside a transcript therefore comes from the decoder within one chunk, not from earlier chunks (verified in whisper.cpp source `whisper_full_with_state`).
+7. **Initial prompt (optional, off by default)**: `--prompt` is injected into the single decode window of *every* chunk. Treat it as an experiment to be measured (`npm run diagnose:whisper`), not a fix.
+8. **Output cleaning with raw/clean separation**: see `vocabularyConfig.ts` above. Transcript text is never logged unless `DEBUG_AUDIO=1` **and** `DEBUG_WHISPER_TEXT=1`.

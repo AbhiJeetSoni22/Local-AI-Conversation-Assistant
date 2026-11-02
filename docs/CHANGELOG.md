@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Phase 4: Transcription Pipeline Regression Fix] - 2026-11-02
+
+> Status: automated and synthetic-audio verification complete. **Real-microphone and real-Whisper verification is pending** on the user's Windows machine (see `TESTING_AND_VALIDATION.md` section 3). The single root cause of the user's three reported transcripts is **not** conclusively proven; see `IMPLEMENTATION_STATUS.md` Observation 3.
+
+### Fixed
+- **Resampler (`src/audio/resampler.ts`)**: replaced per-128-sample-block stateless resampling with a stateful windowed-sinc `StreamingResampler`. Measured before/after (10 s tones, 128-sample blocks): 48 kHz output 161250 -> 160000 samples, 1 kHz tone 992.25 -> 1000.00 Hz, SDR 25.8 -> 111 dB, 10 kHz alias leak -12.5 -> -44.9 dB; 44.1 kHz 158485 -> 160000 samples, 1009.55 -> 1000.00 Hz, SDR 12.0 -> 111 dB, leak -7.1 -> -48.6 dB.
+- **Chunking (`src/audio/speechSegmenter.ts`, `chunkPipeline.ts`, `audioRecorder.ts`)**: blind 3.0 s cuts replaced by pause-aligned utterance segments with pre-roll/trailing pad, click/breath rejection and quiet-point splitting; non-speech is no longer sent to Whisper. Legacy behaviour available as `segmentation: 'fixed'`. Final chunk is emitted exactly once.
+- **Transcript accumulation (`src/audio/transcriptAccumulator.ts`, `src/App.tsx`)**: identity-based guard (session + strictly increasing chunk index) replaces the `endsWith` text comparison that dropped genuinely repeated speech.
+- **Queue (`src/audio/transcriptionQueue.ts`)**: duplicate `(session, chunk)` submissions ignored; dropped chunks counted.
+- **Suggest Answer race (`src/App.tsx`)**: disabled while any chunk is transcribing or queued, so answers are not built from a truncated transcript.
+- **Whisper output cleaning (`electron/vocabularyConfig.ts`)**: removed the regex deny-list that deleted genuine speech ("the channel is called ...", "thanks for watching", trailing "happy?"). Now strips only non-speech annotations and trims a decoder repetition loop (>= 8 identical words / >= 5 repeats of a 2-4 word phrase) to one occurrence. Raw and cleaned text are kept separate (`TranscriptionResult.rawText`).
+- **Logging (`electron/main.ts`, `electron/whisperService.ts`, renderer)**: transcript text is no longer logged in non-production runs. `DEBUG_AUDIO=1` logs metadata only; text additionally requires `DEBUG_WHISPER_TEXT=1`.
+- **`WhisperService.transcribe`**: input audio is validated (and silence short-circuited) before the Whisper environment check.
+- **Ollama prompt (`electron/promptBuilder.ts`)**: removed the rule tailored to YouTube/subscription artefacts; new general imperfect-transcript policy (answer clear questions directly, disclose a corrected-term assumption briefly, one short clarification only if genuinely ambiguous, no echoing of garbled fragments). Not verified against a live model.
+
+### Changed
+- Whisper CLI arguments are produced by one tested function (`buildWhisperCliArgs`): `-m -f -oj -of -t -np` [+ `--prompt` only when configured]. No decoder flags. Flags confirmed to exist in current whisper.cpp source; the user's installed build is probed by `npm run diagnose:whisper`.
+- The technical-vocabulary prompt remains OFF by default and is now an explicit opt-in (`WHISPER_USE_VOCAB_PROMPT=1`).
+
+### Added
+- `scripts/test-pipeline-regression.ts` (`npm run test:pipeline`, 119 assertions), `scripts/analyze-resampler.ts` (`npm run analyze:resampler`), `scripts/diagnose-whisper.ts` (`npm run diagnose:whisper`), `scripts/make-speech-fixtures.ps1`.
+- Opt-in numeric capture diagnostics (AudioContext rate, DSP flags actually applied).
+
+### Documentation corrections
+- Removed stale claims that `-sns`/`-nf`/`-nth` are enabled by default, that Stop "drains" the queue, that the filter is "non-destructive" while it deleted phrases, and the inconsistent assertion counts (44/47 vs actual 28).
+
+### Not changed
+Electron security settings, preload/IPC contracts, microphone permission flow, Start/Stop lifecycle, UI design, local-only architecture, models.
+
+---
+
 ## [Phase 4: Transcription Accuracy & Decoding Stabilization] - 2026-11-01
 
 ### Reverted & Stabilized

@@ -28,9 +28,9 @@ The following features have been fully implemented, built, and verified with aut
 | **Stream Cancellation Support** | `Verified` | `electron/ollamaService.ts`, `electron/main.ts` | Aborts active HTTP stream via `AbortController`; verified in `test:ollama`. | Resets `isGenerating` cleanly. | Verified in unit tests. |
 | **Single-Request Concurrency Guard**| `Verified` | `electron/ollamaService.ts` | Locks generation synchronously; second concurrent request rejected with descriptive error. | Prevents CPU saturation. | Verified in `test:ollama`. |
 | **Automated Ollama Test Suite** | `Verified` | `scripts/test-ollama.ts` | `npm run test:ollama` passes 36 / 36 tests with zero failures. | Deterministic mock HTTP server. | Can run without live Ollama daemon. |
-| **Microphone Capture & Resampling** | `Verified (Automated)` | `src/audio/audioRecorder.ts`, `src/audio/resampler.ts` | Downmixing, 48k/44.1k/16k linear resampling, identity tests in `test:audio` (7 assertions). | Hardware testing pending user run on physical mic. | Verified in unit suite. |
+| **Microphone Capture & Resampling** | `Verified (Automated)` | `src/audio/audioRecorder.ts`, `src/audio/resampler.ts` | Streaming resampler, segmenter and pipeline covered by `test:pipeline` (119 assertions, synthetic audio) and `test:audio` (22). | **Physical-microphone verification NOT done.** | Automated only. |
 | **WAV Encoder & Silence Gate** | `Verified (Automated)` | `src/audio/wavEncoder.ts` | 44-byte RIFF header generation, RMS detection, validator integration in `test:audio` (8 assertions). | RMS threshold fixed at 0.005. | Verified against main wavValidator. |
-| **Sequential Queue & Backpressure** | `Verified (Automated)` | `src/audio/transcriptionQueue.ts` | Strict sequential FIFO, concurrency <= 1, session invalidation, backpressure cap in `test:audio` (7 assertions). | Drops older chunks when depth exceeds 3. | Prevents CPU saturation. |
+| **Sequential Queue & Backpressure** | `Verified (Automated)` | `src/audio/transcriptionQueue.ts` | Strict sequential FIFO, concurrency <= 1, session invalidation, duplicate prevention, bounded backpressure with protected final chunk (`test:audio`, `test:pipeline`). | Drops older chunks when depth exceeds 3 (counted). | Prevents CPU saturation. |
 | **IPC Chunk Transcription Bridge** | `Verified` | `electron/main.ts`, `electron/preload.ts` | Typed IPC handler `whisper:transcribe-chunk` validates WAV and transcribes via `WhisperService`. | Exposes clean, non-node API. | Verified in build & smoke launch. |
 | **Live Transcript Appending** | `Verified` | `src/App.tsx` | Transcribed text progressively appends to transcript panel; clean Start/Stop lifecycle. | Relies on local whisper.cpp execution. | Tested in build and smoke launch. |
 
@@ -55,12 +55,18 @@ The following features have been fully implemented, built, and verified with aut
 
 ### Observation 1: Whisper Sample Rate Resampling (RESOLVED)
 - **Status:** Resolved in Phase 4.
-- **Resolution:** `src/audio/resampler.ts` explicitly downsamples all browser audio streams (44.1 kHz or 48 kHz) to 16,000 Hz single-channel mono PCM with linear interpolation before WAV encoding and IPC transfer.
+- **Resolution:** `src/audio/resampler.ts` explicitly downsamples all browser audio streams (44.1 kHz or 48 kHz) to 16,000 Hz single-channel mono PCM with a stateful windowed-sinc `StreamingResampler` before WAV encoding and IPC transfer. (The original implementation resampled each 128-sample block independently and was found to distort timing/pitch and alias high frequencies; fixed in the transcription-regression pass, see Observation 3.)
 
 ### Observation 2: Single Validation Check on Mount
 - **Finding:** The React UI checks Whisper and Ollama readiness once when the app mounts. If the user starts Ollama or downloads a model while the app is running, they must restart the app to clear the `Unavailable` badge.
 - **Risk Level:** Low.
 - **Recommendation for Phase 5:** Expose a "Re-check Environment" button in the warning boxes.
+
+### Observation 3: Transcription regression pass (Phase 4 follow-up) - STATUS: fixes implemented, hardware verification PENDING
+- **Confirmed defects fixed (evidence in `test:pipeline`, `analyze:resampler`):** per-block resampler distortion (+0.78 % / -0.95 % time-scale error, 12-26 dB SDR, 10 kHz tone passing at -12.5 / -7.1 dB); blind 3.0 s cuts that split words and send trailing silence/noise/clicks to Whisper; text-based `endsWith` dedupe that erased genuinely repeated speech; Suggest Answer enabled while the final chunk was still being transcribed; regex deny-list deleting genuine words; transcript text logged to the console in any non-production run; docs that contradicted the code (`-sns`/`-nf`/`-nth` described as enabled; "drain on Stop" that did not exist).
+- **Not confirmed:** the single root cause of the user's three observed transcripts. Without the original raw per-chunk Whisper output, the audio, the whisper.cpp version, or Git history, it is not possible to prove it from the ZIP. Best-supported diagnosis: Test 2 (prompt-regurgitation phrasing) matches a vocabulary prompt injected into every short chunk; Test 3 ("bye" x14) matches the decoder-loop failure that the repository's own CHANGELOG attributes to `-sns` + `-nf` combined with non-speech audio; both are compounded by the pipeline defects above. The ZIP's code no longer passes those flags or a default prompt.
+- **Pending (user hardware):** the checklist in `TESTING_AND_VALIDATION.md` section 3 and `npm run diagnose:whisper`. Nothing there is marked complete.
+- **Open decisions requiring evidence:** whether browser noise suppression / auto-gain help or hurt on this microphone; whether any vocabulary prompt measurably helps (kept OFF); segmenter thresholds on real hardware.
 
 ---
 

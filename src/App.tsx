@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import type { WhisperReadiness, OllamaReadiness } from './types/electron'
 import { AudioRecorder } from './audio/audioRecorder'
 import { TranscriptionQueue } from './audio/transcriptionQueue'
+import { SegmentGate, appendSegmentText } from './audio/transcriptAccumulator'
+import { isAudioDebugEnabled } from './audio/debug'
 
 type AppStatus = 'Idle' | 'Listening' | 'Stopped' | 'Generating'
 type ComponentStatus = 'Checking' | 'Ready' | 'Unavailable'
@@ -27,6 +29,8 @@ export default function App() {
   const [suggestedAnswer, setSuggestedAnswer] = useState<string | null>(null)
   const [isGenerating, setIsGenerating] = useState<boolean>(false)
   const [isTranscribing, setIsTranscribing] = useState<boolean>(false)
+  // True while any chunk is being transcribed OR still waiting in the queue (e.g. the final chunk after Stop)
+  const [transcriptionBusy, setTranscriptionBusy] = useState<boolean>(false)
   const [streamMeta, setStreamMeta] = useState<{ durationMs?: number; model?: string; isCancelled?: boolean } | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
   const [copied, setCopied] = useState<boolean>(false)
@@ -34,6 +38,7 @@ export default function App() {
   // Phase 4 Audio Recorder and Queue References
   const audioRecorderRef = useRef<AudioRecorder | null>(null)
   const transcriptionQueueRef = useRef<TranscriptionQueue | null>(null)
+  const segmentGateRef = useRef<SegmentGate>(new SegmentGate())
 
   useEffect(() => {
     // 1. Initialize Transcription Queue
@@ -46,19 +51,18 @@ export default function App() {
       },
       onSegment: (segment) => {
         const clean = segment.text.trim()
-        if (clean && !segment.isSilent) {
-          if (process.env.NODE_ENV !== 'production') {
-            console.log(`[Transcript Segment] Received: "${clean}" (silent=${segment.isSilent})`)
-          }
-          setTranscript((prev) => {
-            if (!prev) return clean
-            if (prev.endsWith(clean)) return prev
-            return `${prev} ${clean}`
-          })
+        if (!clean || segment.isSilent) return
+        // Identity-based guard: ignores duplicates, out-of-order results and other sessions' output.
+        if (!segmentGateRef.current.accept(segment)) return
+        if (isAudioDebugEnabled()) {
+          // Metadata only. Transcript text is never written to the console.
+          console.log(`[Transcript] segment accepted: session=${segment.sessionId} chunk=${segment.chunkIndex} chars=${clean.length}`)
         }
+        setTranscript((prev) => appendSegmentText(prev, clean))
       },
       onStatusChange: (qStatus) => {
         setIsTranscribing(qStatus.isProcessing)
+        setTranscriptionBusy(qStatus.isProcessing || qStatus.pendingCount > 0)
       },
       onError: (err) => {
         setValidationError(`Transcription error: ${err.message}`)
@@ -178,9 +182,13 @@ export default function App() {
     }
 
     try {
+      // Defaults: pause-aligned utterance segmentation. Tuning/A-B options (see docs/TROUBLESHOOTING.md):
+      //   segmentation: 'fixed'                       -> legacy blind cuts every chunkDurationSec
+      //   segmenter: { minSpeechRms: 0.008, ... }     -> speech-energy thresholds
+      //   audioConstraints: { noiseSuppression: false, autoGainControl: false }
       const recorder = new AudioRecorder({
-        chunkDurationSec: 3.0,
-        minFinalChunkDurationSec: 0.5,
+        chunkDurationSec: 3.0, // used only when segmentation === 'fixed'
+        minFinalChunkDurationSec: 0.5, // used only when segmentation === 'fixed'
         onChunk: (chunk) => {
           transcriptionQueueRef.current?.enqueue(chunk)
         },
@@ -192,6 +200,7 @@ export default function App() {
       audioRecorderRef.current = recorder
 
       const sessionId = await recorder.start()
+      segmentGateRef.current.startSession(sessionId)
       transcriptionQueueRef.current?.setActiveSession(sessionId)
       setStatus('Listening')
     } catch (err: unknown) {
@@ -218,6 +227,12 @@ export default function App() {
     // Validation 1: Transcript must exist
     if (!transcript.trim()) {
       setValidationError('Cannot suggest answer: Conversation transcript is empty. Record speech or load a sample first.')
+      return
+    }
+
+    // Validation 1b: the final chunk after Stop may still be transcribing; answering now would use a truncated transcript
+    if (transcriptionBusy) {
+      setValidationError('Transcription is still finishing the last audio. Please wait a moment, then try again.')
       return
     }
 
@@ -403,11 +418,13 @@ export default function App() {
             id="btn-suggest"
             className="btn btn-suggest"
             onClick={handleSuggestAnswer}
-            disabled={isGenerating || status === 'Listening' || ollamaStatus !== 'Ready' || !transcript.trim()}
+            disabled={isGenerating || status === 'Listening' || transcriptionBusy || ollamaStatus !== 'Ready' || !transcript.trim()}
             title={
               status === 'Listening'
                 ? 'Stop recording before generating an answer.'
-                : ollamaStatus !== 'Ready'
+                : transcriptionBusy
+                  ? 'Waiting for transcription of the last audio to finish.'
+                  : ollamaStatus !== 'Ready'
                   ? 'Ollama is offline or model is missing.'
                   : !transcript.trim()
                     ? 'Record speech or load a transcript first.'

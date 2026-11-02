@@ -34,8 +34,10 @@ The application can be configured at runtime via standard Windows environment va
 | **`WHISPER_ENGINE`** | String | `cli` | Whisper engine mode: `'cli'` for atomic CLI invocation, or `'server'` for HTTP daemon mode. |
 | **`WHISPER_HOST`** | String | `127.0.0.1` | Host interface for `whisper-server.exe`. |
 | **`WHISPER_PORT`** | Number | `8080` | Port for `whisper-server.exe`. |
-| **`WHISPER_INITIAL_PROMPT`** | String | *(unset / empty)* | Optional initial prompt string passed as `--prompt` to Whisper to condition vocabulary recognition. Defaults to empty for clean baseline decoding. |
-| **`DEBUG_AUDIO`** | String | *(unset)* | Set to `"1"` to enable verbose dev console diagnostics for audio chunk energy, Whisper CLI transcription timings, and raw vs cleaned output. |
+| **`WHISPER_INITIAL_PROMPT`** | String | *(unset / empty)* | Optional initial prompt string passed as `--prompt` to Whisper to condition vocabulary recognition. Defaults to empty for clean baseline decoding. Takes precedence over `WHISPER_USE_VOCAB_PROMPT`. |
+| **`WHISPER_USE_VOCAB_PROMPT`** | String | *(unset)* | Set to `"1"` to opt in to the curated technical-vocabulary prompt (`buildInitialPrompt()`). OFF by default until `npm run diagnose:whisper` shows a measured benefit. |
+| **`DEBUG_WHISPER_TEXT`** | String | *(unset)* | With `DEBUG_AUDIO=1`, additionally logs raw vs cleaned transcript text in the main process. Conversation content: leave unset normally. |
+| **`DEBUG_AUDIO`** | String | *(unset)* | Set to `"1"` to log metadata only (effective Whisper arguments, durations, character counts, flags). No audio, no transcript text. In the renderer the equivalent switch is `localStorage.setItem('DEBUG_AUDIO','1')`. |
 
 ### Ollama Configuration (Phase 3)
 | Variable | Type | Default | Description |
@@ -60,8 +62,10 @@ These parameters govern the renderer microphone capture and chunking pipeline:
 | Parameter | Value | Component | Description |
 | :--- | :---: | :--- | :--- |
 | **Microphone Channel Count** | `1` (Mono) | `AudioRecorder` | Audio constraints request single-channel mono with echo cancellation, noise suppression, and auto gain control. |
-| **Internal Target Sample Rate** | `16,000 Hz` | `resampler.ts` | All incoming hardware audio (44.1kHz, 48kHz, etc.) is resampled to 16kHz via anti-aliasing linear interpolation. |
-| **Target Chunk Duration** | `3.0 seconds` | `AudioRecorder` | Exactly 48,000 samples @ 16kHz. Yields optimal balance between latency and transcription accuracy. |
+| **Internal Target Sample Rate** | `16,000 Hz` | `resampler.ts` | All incoming hardware audio (44.1kHz, 48kHz, etc.) is resampled to 16kHz by one stateful windowed-sinc `StreamingResampler` per recording. |
+| **Segmentation mode** | `speech` (default) / `fixed` | `AudioRecorder` option `segmentation` | `speech`: utterances cut at pauses. `fixed`: legacy 3.0 s (48,000-sample) blind cuts, kept for A/B tests. |
+| **Segmenter thresholds** | frame 20 ms; speech RMS > max(0.010, 3 x noise floor); min speech 200 ms; hangover 700 ms; pre-roll 300 ms; trailing pad 250 ms; soft max 8 s; hard max 12 s | `SpeechSegmenterOptions` | Energy only; tune on real hardware. |
+| **Browser DSP** | echoCancellation, noiseSuppression, autoGainControl all `true` | `AudioRecorder` option `audioConstraints` | Unchanged defaults; candidates for A/B testing. |
 | **Minimum Final Chunk Duration**| `0.5 seconds` | `AudioRecorder` | Exactly 8,000 samples @ 16kHz. When the user clicks Stop, partial audio shorter than 0.5s is discarded to prevent incomplete word artifacts. |
 | **Silence Gating Threshold** | `0.005` RMS | `AudioRecorder` / `wavEncoder` | Buffers with RMS energy below 0.005 are flagged as silent and bypass `whisper-cli.exe` execution. |
 | **Maximum Queue Backpressure** | `3 chunks` | `TranscriptionQueue` | Limits pending transcription backlog to 3 items. If CPU is under heavy load, drops excess unstarted chunks to prevent memory bloat. |
@@ -94,7 +98,7 @@ The prompt builder sanitizes untrusted conversation transcripts before passing t
 | **Maximum Transcript Length** | 12,000 chars | If transcript exceeds this limit, older conversation is trimmed while preserving the most recent context and appending a truncation notice. |
 | **Context Fencing** | `--- BEGIN TRANSCRIPT ---` / `--- END TRANSCRIPT ---` | Explicit demarcation boundaries prevent prompt injection and model confusion. |
 | **Default Temperature** | `0.7` | Balances concise response generation with conversational fluidity. |
-| **Speech-Aware Conversational Framing** | System Prompt Instructions | Instructs model to expect real-time speech transcripts, infer speaker intent despite minor acoustic imperfections, explain technical concepts (LangChain, LLMs, RAG) concisely using domain knowledge, and ignore stray transcription noise or YouTube boilerplate hallucinations. |
+| **Speech-Aware Conversational Framing** | System Prompt Instructions | Instructs model to expect real-time speech transcripts, infer speaker intent despite minor acoustic imperfections, explain technical concepts (LangChain, LLMs, RAG) concisely using domain knowledge, answer clear questions directly, state an assumed corrected term briefly, ask one short clarifying question only when genuinely ambiguous, and never comment on transcription errors. |
 
 ---
 

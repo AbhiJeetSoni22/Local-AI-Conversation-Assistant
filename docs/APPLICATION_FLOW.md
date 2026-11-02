@@ -19,7 +19,7 @@ Microphone Audio Capture (getUserMedia + AudioWorklet)
     ↓ [Phase 4: IMPLEMENTED & TESTED]
 Audio Resampling (16 kHz, 16-bit Mono PCM)
     ↓ [Phase 4: IMPLEMENTED & TESTED]
-Audio Chunking (3.0s window) & Client Silence Rejection (RMS < 0.005)
+Utterance Segmentation (pause-aligned, non-speech trimmed)
     ↓ [Phase 4: IMPLEMENTED & TESTED]
 Sequential Transcription Queue & Backpressure Capping (Depth 3)
     ↓ [Phase 4: IMPLEMENTED & TESTED]
@@ -52,11 +52,11 @@ Controls the primary UI controls and button accessibility:
   - Buttons: `Start` is enabled; `Stop` is disabled; `Suggest Answer` is disabled until transcript exists and Ollama is ready.
   - Panels: Live Transcript shows empty-state prompt with "Load Sample Meeting Transcript" utility; Suggested Answer shows empty-state prompt.
 - **`Listening`**: Entered when user clicks `Start`.
-  - Action: Microphone capture is active. Audio is sampled, resampled to 16 kHz mono, buffered into 3.0-second intervals, encoded into WAV, and queued for Whisper transcription.
+  - Action: Microphone capture is active. Audio is sampled, resampled to 16 kHz mono, segmented into utterances at pauses, encoded into WAV, and queued for Whisper transcription.
   - Indicators: Shows emerald "Listening" status badge and animated audio equalizer wave. When Whisper is actively processing an audio chunk, a subtle "Transcribing audio..." spinner indicator activates.
   - Buttons: `Start` is disabled; `Stop` is enabled.
 - **`Stopped`**: Entered when user clicks `Stop` or after generation finishes.
-  - Action: Audio capture stops, remaining buffers >= 0.5s flush, media streams release, and in-flight queue items drain cleanly.
+  - Action: Audio capture stops, the open utterance (if it contains speech) flushes exactly once, media streams release, and the queue finishes remaining chunks. Suggest Answer stays disabled until the queue is idle.
   - Buttons: `Start` is enabled; `Stop` is disabled.
 - **`Generating`**: Entered when user clicks `Suggest Answer`.
   - Buttons: `Start`, `Stop`, and `Suggest Answer` are disabled; `Cancel Generation` button appears.
@@ -166,12 +166,12 @@ sequenceDiagram
     Rec->>Rec: navigator.mediaDevices.getUserMedia({ audio: true })
     Rec->>Rec: AudioContext + inline AudioWorklet (downmix & resample to 16 kHz)
 
-    loop Continuous Audio Capture (Every 3.0 Seconds)
-        Rec->>Rec: Accumulate 48,000 samples @ 16 kHz mono
-        Rec->>Rec: encodeWav16kMono(samples)
-        alt RMS < 0.005 (Silence Detected)
-            Note over Rec: Discard silent chunk locally (Zero IPC / Zero CPU STT)
-        else Speech Detected (RMS >= 0.005)
+    loop Continuous capture (128-sample blocks)
+        Rec->>Rec: StreamingResampler -> 16 kHz; SpeechSegmenter finds utterance boundaries
+        alt No segment closed yet / segment has < 200 ms speech energy
+            Note over Rec: Nothing emitted (zero IPC, zero Whisper calls)
+        else Utterance complete (pause >= 700 ms or 12 s cap)
+            Rec->>Rec: encodeWav16kMono(utterance)
             Rec->>Queue: enqueue(wavBytes)
             alt Queue Depth > 3 (Backpressure)
                 Note over Queue: Drop oldest pending chunk to prevent CPU overload
@@ -185,8 +185,8 @@ sequenceDiagram
             Main-->>Preload: Returns TranscriptionChunkResult
             Preload-->>Queue: Resolve chunk transcription
             alt Session ID matches active recording session
-                Queue->>UI: onChunkTranscribed(text)
-                Note over UI: Append text to Live Transcript with auto-scroll
+                Queue->>UI: onSegment(text)
+                Note over UI: SegmentGate (session + strictly increasing chunkIndex) then append
             else Session ID is stale (user clicked Stop/Restart)
                 Note over Queue: Discard text from superseded session
             end
@@ -196,18 +196,17 @@ sequenceDiagram
 
     User->>UI: Clicks "Stop"
     UI->>Rec: stop()
-    Rec->>Rec: Check pending buffer: if >= 0.5s (8,000 samples), flush as final chunk
+    Rec->>Rec: finish(): flush the open utterance once, flagged isFinal
     Rec->>Rec: Stop MediaStream tracks & close AudioContext
-    UI->>Queue: drain() (finish any actively transcribing chunk)
-    Queue-->>UI: Drain complete
-    UI->>UI: setStatus('Stopped'), setIsTranscribing(false)
+    UI->>UI: setStatus('Stopped')
+    Queue-->>UI: onStatusChange(idle) enables Suggest Answer
 ```
 
 ### Detailed Lifecycle Steps:
 1. **Microphone Acquisition**: The renderer calls `navigator.mediaDevices.getUserMedia` with constraint flags: mono channel (`channelCount: 1`), browser acoustic echo cancellation (`echoCancellation: true`), background noise suppression (`noiseSuppression: true`), and automatic gain control (`autoGainControl: true`).
-2. **AudioWorklet Processing**: Samples are captured on the high-priority Web Audio rendering thread via an inline `AudioWorkletNode`. If the hardware sample rate is not 16,000 Hz (typically 48,000 Hz or 44,100 Hz), the samples are resampled to exactly 16 kHz using linear interpolation.
-3. **Window Buffering**: The recorder accumulates samples until a 3.0-second chunk window is reached (`48,000` samples at 16 kHz).
-4. **Silence Gating**: Each chunk is evaluated for Root-Mean-Square (RMS) amplitude. Buffers with RMS < 0.005 (e.g. ambient background room silence) are immediately discarded without invoking IPC or launching `whisper-cli.exe`.
+2. **AudioWorklet Processing**: Samples are captured on the Web Audio rendering thread via an inline `AudioWorkletNode` in 128-sample blocks. Each block is copied and pushed through one stateful `StreamingResampler` per recording (device rate, usually 48 kHz or 44.1 kHz, to exactly 16 kHz mono).
+3. **Utterance Segmentation**: `SpeechSegmenter` tracks 20 ms frame energy against an adaptive noise floor. A segment opens at speech onset (300 ms pre-roll), closes after 700 ms of non-speech (250 ms trailing pad kept), is split at the quietest point if it reaches 12 s, and is dropped if it holds < 200 ms of speech-level energy.
+4. **Silence Gating**: Silence, room noise, breaths and clicks never produce a segment, so they never reach IPC or `whisper-cli.exe`. The whole-chunk RMS flag (< 0.005) in `wavEncoder.ts`/`wavValidator.ts` remains as a second line of defence.
 5. **WAV Serialization**: Samples are converted from IEEE Float32 to 16-bit signed integer linear PCM (`pcm_s16le`) and wrapped in a canonical 44-byte RIFF/WAVE header.
 6. **Sequential Execution & Backpressure**: `TranscriptionQueue` ensures only one chunk is sent to Whisper at any given time. If transcription latency causes queue depth to exceed 3 pending chunks, older chunks are safely dropped to prevent latency drift and memory buildup.
-7. **Clean Session Teardown**: Clicking "Stop" releases hardware mic tracks, closes the `AudioContext`, flushes any remaining speech buffer exceeding 0.5s (`8,000` samples), and drains active in-flight requests. Stale chunks from previous recording sessions are invalidated by a monotonically incremented `sessionId`.
+7. **Clean Session Teardown**: Clicking "Stop" releases hardware mic tracks, closes the `AudioContext`, flushes the open utterance exactly once (`finish()` is idempotent), and lets the queue complete remaining chunks (the UI blocks Suggest Answer until it is idle). Stale chunks from previous recording sessions are invalidated by a monotonically incremented `sessionId`.

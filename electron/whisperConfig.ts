@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { buildInitialPrompt } from './vocabularyConfig'
 
 export interface WhisperConfig {
   binPath: string
@@ -73,9 +74,19 @@ export function getWhisperConfig(overrides?: Partial<WhisperConfig>): WhisperCon
   const serverPort = overrides?.serverPort || (process.env.WHISPER_PORT ? parseInt(process.env.WHISPER_PORT, 10) : 8080)
   const threads = overrides?.threads || 4
 
-  const initialPrompt = overrides?.initialPrompt !== undefined
-    ? overrides.initialPrompt
-    : (process.env.WHISPER_INITIAL_PROMPT || '')
+  // Initial prompt policy: OFF by default. An explicit override / WHISPER_INITIAL_PROMPT wins;
+  // the curated technical-vocabulary prompt is opt-in via WHISPER_USE_VOCAB_PROMPT=1 (see
+  // vocabularyConfig.ts and `npm run diagnose:whisper` for how to measure whether it helps).
+  let initialPrompt: string
+  if (overrides?.initialPrompt !== undefined) {
+    initialPrompt = overrides.initialPrompt
+  } else if (process.env.WHISPER_INITIAL_PROMPT && process.env.WHISPER_INITIAL_PROMPT.trim()) {
+    initialPrompt = process.env.WHISPER_INITIAL_PROMPT.trim()
+  } else if (process.env.WHISPER_USE_VOCAB_PROMPT === '1' || process.env.WHISPER_USE_VOCAB_PROMPT === 'true') {
+    initialPrompt = buildInitialPrompt()
+  } else {
+    initialPrompt = ''
+  }
 
   return {
     binPath: path.resolve(binPath),
@@ -86,6 +97,35 @@ export function getWhisperConfig(overrides?: Partial<WhisperConfig>): WhisperCon
     threads,
     initialPrompt,
   }
+}
+
+/**
+ * Builds the exact whisper-cli argument vector for one chunk. Pure and unit-tested.
+ *
+ * Baseline (verified against whisper.cpp examples/cli/cli.cpp): -m model, -f wav, -oj (JSON),
+ * -of prefix, -t threads, -np (no prints) [+ --prompt when an initial prompt is configured].
+ * Decoding flags (-sns, -nf, -nth, -mc, -et, -lpt ...) are deliberately NOT passed: a previous
+ * iteration combined -sns with -nf and was reported to cause runaway repetition on weak audio, so
+ * decoder defaults (temperature fallback ON, no-speech threshold 0.6, entropy threshold 2.4,
+ * log-prob threshold -1.0) are left untouched until a controlled A/B shows a benefit.
+ */
+export function buildWhisperCliArgs(
+  config: Pick<WhisperConfig, 'modelPath' | 'threads' | 'initialPrompt'>,
+  audioFilePath: string,
+  outputPrefix: string
+): string[] {
+  const args = [
+    '-m', config.modelPath,
+    '-f', audioFilePath,
+    '-oj', // Output JSON
+    '-of', outputPrefix,
+    '-t', String(config.threads),
+    '-np', // Do not print anything other than results
+  ]
+  if (config.initialPrompt && config.initialPrompt.trim()) {
+    args.push('--prompt', config.initialPrompt.trim())
+  }
+  return args
 }
 
 /**

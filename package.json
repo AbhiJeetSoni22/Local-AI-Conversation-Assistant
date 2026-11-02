@@ -13,7 +13,10 @@
     "validate:ollama": "tsx scripts/validate-ollama.ts",
     "test:ollama": "tsx scripts/test-ollama.ts",
     "test:audio": "tsx scripts/test-phase4-audio.ts",
-    "test:accuracy": "tsx scripts/test-transcription-accuracy.ts"
+    "test:accuracy": "tsx scripts/test-transcription-accuracy.ts",
+    "test:pipeline": "tsx scripts/test-pipeline-regression.ts",
+    "analyze:resampler": "tsx scripts/analyze-resampler.ts",
+    "diagnose:whisper": "tsx scripts/diagnose-whisper.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

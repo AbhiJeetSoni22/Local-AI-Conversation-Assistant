@@ -1,0 +1,509 @@
+--- a/docs/APPLICATION_FLOW.md
++++ b/docs/APPLICATION_FLOW.md
+@@ -19,7 +19,7 @@
+     ↓ [Phase 4: IMPLEMENTED & TESTED]
+ Audio Resampling (16 kHz, 16-bit Mono PCM)
+     ↓ [Phase 4: IMPLEMENTED & TESTED]
+-Audio Chunking (3.0s window) & Client Silence Rejection (RMS < 0.005)
++Utterance Segmentation (pause-aligned, non-speech trimmed)
+     ↓ [Phase 4: IMPLEMENTED & TESTED]
+ Sequential Transcription Queue & Backpressure Capping (Depth 3)
+     ↓ [Phase 4: IMPLEMENTED & TESTED]
+@@ -52,11 +52,11 @@
+   - Buttons: `Start` is enabled; `Stop` is disabled; `Suggest Answer` is disabled until transcript exists and Ollama is ready.
+   - Panels: Live Transcript shows empty-state prompt with "Load Sample Meeting Transcript" utility; Suggested Answer shows empty-state prompt.
+ - **`Listening`**: Entered when user clicks `Start`.
+-  - Action: Microphone capture is active. Audio is sampled, resampled to 16 kHz mono, buffered into 3.0-second intervals, encoded into WAV, and queued for Whisper transcription.
++  - Action: Microphone capture is active. Audio is sampled, resampled to 16 kHz mono, segmented into utterances at pauses, encoded into WAV, and queued for Whisper transcription.
+   - Indicators: Shows emerald "Listening" status badge and animated audio equalizer wave. When Whisper is actively processing an audio chunk, a subtle "Transcribing audio..." spinner indicator activates.
+   - Buttons: `Start` is disabled; `Stop` is enabled.
+ - **`Stopped`**: Entered when user clicks `Stop` or after generation finishes.
+-  - Action: Audio capture stops, remaining buffers >= 0.5s flush, media streams release, and in-flight queue items drain cleanly.
++  - Action: Audio capture stops, the open utterance (if it contains speech) flushes exactly once, media streams release, and the queue finishes remaining chunks. Suggest Answer stays disabled until the queue is idle.
+   - Buttons: `Start` is enabled; `Stop` is disabled.
+ - **`Generating`**: Entered when user clicks `Suggest Answer`.
+   - Buttons: `Start`, `Stop`, and `Suggest Answer` are disabled; `Cancel Generation` button appears.
+@@ -166,12 +166,12 @@
+     Rec->>Rec: navigator.mediaDevices.getUserMedia({ audio: true })
+     Rec->>Rec: AudioContext + inline AudioWorklet (downmix & resample to 16 kHz)
+ 
+-    loop Continuous Audio Capture (Every 3.0 Seconds)
+-        Rec->>Rec: Accumulate 48,000 samples @ 16 kHz mono
+-        Rec->>Rec: encodeWav16kMono(samples)
+-        alt RMS < 0.005 (Silence Detected)
+-            Note over Rec: Discard silent chunk locally (Zero IPC / Zero CPU STT)
+-        else Speech Detected (RMS >= 0.005)
++    loop Continuous capture (128-sample blocks)
++        Rec->>Rec: StreamingResampler -> 16 kHz; SpeechSegmenter finds utterance boundaries
++        alt No segment closed yet / segment has < 200 ms speech energy
++            Note over Rec: Nothing emitted (zero IPC, zero Whisper calls)
++        else Utterance complete (pause >= 700 ms or 12 s cap)
++            Rec->>Rec: encodeWav16kMono(utterance)
+             Rec->>Queue: enqueue(wavBytes)
+             alt Queue Depth > 3 (Backpressure)
+                 Note over Queue: Drop oldest pending chunk to prevent CPU overload
+@@ -185,8 +185,8 @@
+             Main-->>Preload: Returns TranscriptionChunkResult
+             Preload-->>Queue: Resolve chunk transcription
+             alt Session ID matches active recording session
+-                Queue->>UI: onChunkTranscribed(text)
+-                Note over UI: Append text to Live Transcript with auto-scroll
++                Queue->>UI: onSegment(text)
++                Note over UI: SegmentGate (session + strictly increasing chunkIndex) then append
+             else Session ID is stale (user clicked Stop/Restart)
+                 Note over Queue: Discard text from superseded session
+             end
+@@ -196,18 +196,17 @@
+ 
+     User->>UI: Clicks "Stop"
+     UI->>Rec: stop()
+-    Rec->>Rec: Check pending buffer: if >= 0.5s (8,000 samples), flush as final chunk
++    Rec->>Rec: finish(): flush the open utterance once, flagged isFinal
+     Rec->>Rec: Stop MediaStream tracks & close AudioContext
+-    UI->>Queue: drain() (finish any actively transcribing chunk)
+-    Queue-->>UI: Drain complete
+-    UI->>UI: setStatus('Stopped'), setIsTranscribing(false)
++    UI->>UI: setStatus('Stopped')
++    Queue-->>UI: onStatusChange(idle) enables Suggest Answer
+ ```
+ 
+ ### Detailed Lifecycle Steps:
+ 1. **Microphone Acquisition**: The renderer calls `navigator.mediaDevices.getUserMedia` with constraint flags: mono channel (`channelCount: 1`), browser acoustic echo cancellation (`echoCancellation: true`), background noise suppression (`noiseSuppression: true`), and automatic gain control (`autoGainControl: true`).
+-2. **AudioWorklet Processing**: Samples are captured on the high-priority Web Audio rendering thread via an inline `AudioWorkletNode`. If the hardware sample rate is not 16,000 Hz (typically 48,000 Hz or 44,100 Hz), the samples are resampled to exactly 16 kHz using linear interpolation.
+-3. **Window Buffering**: The recorder accumulates samples until a 3.0-second chunk window is reached (`48,000` samples at 16 kHz).
+-4. **Silence Gating**: Each chunk is evaluated for Root-Mean-Square (RMS) amplitude. Buffers with RMS < 0.005 (e.g. ambient background room silence) are immediately discarded without invoking IPC or launching `whisper-cli.exe`.
++2. **AudioWorklet Processing**: Samples are captured on the Web Audio rendering thread via an inline `AudioWorkletNode` in 128-sample blocks. Each block is copied and pushed through one stateful `StreamingResampler` per recording (device rate, usually 48 kHz or 44.1 kHz, to exactly 16 kHz mono).
++3. **Utterance Segmentation**: `SpeechSegmenter` tracks 20 ms frame energy against an adaptive noise floor. A segment opens at speech onset (300 ms pre-roll), closes after 700 ms of non-speech (250 ms trailing pad kept), is split at the quietest point if it reaches 12 s, and is dropped if it holds < 200 ms of speech-level energy.
++4. **Silence Gating**: Silence, room noise, breaths and clicks never produce a segment, so they never reach IPC or `whisper-cli.exe`. The whole-chunk RMS flag (< 0.005) in `wavEncoder.ts`/`wavValidator.ts` remains as a second line of defence.
+ 5. **WAV Serialization**: Samples are converted from IEEE Float32 to 16-bit signed integer linear PCM (`pcm_s16le`) and wrapped in a canonical 44-byte RIFF/WAVE header.
+ 6. **Sequential Execution & Backpressure**: `TranscriptionQueue` ensures only one chunk is sent to Whisper at any given time. If transcription latency causes queue depth to exceed 3 pending chunks, older chunks are safely dropped to prevent latency drift and memory buildup.
+-7. **Clean Session Teardown**: Clicking "Stop" releases hardware mic tracks, closes the `AudioContext`, flushes any remaining speech buffer exceeding 0.5s (`8,000` samples), and drains active in-flight requests. Stale chunks from previous recording sessions are invalidated by a monotonically incremented `sessionId`.
++7. **Clean Session Teardown**: Clicking "Stop" releases hardware mic tracks, closes the `AudioContext`, flushes the open utterance exactly once (`finish()` is idempotent), and lets the queue complete remaining chunks (the UI blocks Suggest Answer until it is idle). Stale chunks from previous recording sessions are invalidated by a monotonically incremented `sessionId`.
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -14,7 +14,7 @@
+         UI["React UI (App.tsx)"]
+         State["UI State Model<br/>(status, whisperStatus, ollamaStatus, isGenerating, isTranscribing)"]
+         AudioRec["Audio Recorder (audioRecorder.ts)<br/>getUserMedia + AudioWorklet"]
+-        Resampler["Audio Resampler & Downmixer (resampler.ts)<br/>Linear Interpolation to 16kHz Mono"]
++        Resampler["Audio Resampler & Downmixer (resampler.ts)<br/>Stateful windowed-sinc to 16kHz Mono"]
+         WavEnc["WAV Encoder & Silence Gate (wavEncoder.ts)<br/>16-bit PCM RIFF Header + RMS"]
+         TxQueue["Transcription Queue (transcriptionQueue.ts)<br/>Sequential FIFO + Session Capping"]
+         BridgeClient["window.electronApi Client"]
+@@ -157,8 +157,8 @@
+ - **`src/App.tsx`**: Main UI component containing the responsive grid layout, status indicators, action buttons, and panels.
+ - **UI State Model**: Maintains execution status (`Idle`, `Listening`, `Stopped`, `Generating`), transcribing status (`isTranscribing`), component readiness (`Checking`, `Ready`, `Unavailable`), conversation transcript, and streaming answer state.
+ - **User Actions**:
+-  - `Start`: Requests microphone permissions, initializes `AudioRecorder`, and begins continuous 3-second audio chunking and live transcription.
+-  - `Stop`: Halts audio capture, releases microphone hardware tracks, drains in-flight audio transcription queue, and transitions UI to `Stopped`.
++  - `Start`: Requests microphone permissions, initializes `AudioRecorder`, and begins pause-aligned utterance segmentation and live transcription.
++  - `Stop`: Halts audio capture, releases microphone hardware tracks, flushes the final utterance exactly once, and transitions UI to `Stopped`. The **Suggest Answer** button stays disabled until the transcription queue has finished the last audio (`transcriptionBusy`), so an answer is never generated from a truncated transcript.
+   - `Suggest Answer`: Validates transcript and Ollama readiness, then triggers local streaming answer generation.
+   - `Cancel Generation`: Aborts active Ollama inference stream mid-flight.
+   - `Load Sample Meeting Transcript`: Populates transcript with conversation text for immediate testing.
+@@ -166,13 +166,15 @@
+ - **Actionable Error Rendering**: When Whisper, Ollama, or Microphone access is unavailable, displays a highlighted guidance card instructing the user on exact manual setup steps.
+ 
+ ### D. Audio Capture & Processing Pipeline (`src/audio/`)
+-- **`audioRecorder.ts`**: Handles microphone acquisition via `navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })`. Employs an `AudioWorkletNode` (loaded dynamically via inline Blob URL) with fallback to `ScriptProcessorNode`. Accumulates samples in 3.0-second intervals (48,000 samples @ 16 kHz), and automatically flushes pending buffers >= 0.5s on stop.
+-- **`resampler.ts`**: Pure DSP utilities for multi-channel downmixing (`downmixToMono`), linear interpolation with anti-aliasing low-pass filtering (`resampleTo16k`), and Root-Mean-Square energy calculation (`calculateRms`).
+-- **`wavEncoder.ts`**: Encodes 16 kHz Float32 PCM arrays into standard 44-byte header 16-bit linear PCM (`pcm_s16le`) RIFF/WAVE buffers (`Uint8Array`). Evaluates RMS energy against silence threshold (`0.005`) to discard silent chunks before IPC transmission.
+-- **`transcriptionQueue.ts`**: Strict FIFO sequential worker queue that prevents concurrent `whisper-cli.exe` invocations. Implements session ID validation (drops stale chunks from previous recordings) and queue depth backpressure capping (`maxQueueDepth = 3`) to prevent memory pressure when Whisper transcription duration exceeds audio window duration.
+-- **`electron/vocabularyConfig.ts`**: Strips acoustic markers (`[BLANK_AUDIO]`, `[MUSIC]`, `(applause)`, `(whirring)`) and low-confidence YouTube boilerplate from output, while leaving genuine spoken speech intact. Optional initial prompt conditioning is configurable via `WHISPER_INITIAL_PROMPT`.
+-
+----
++- **`audioRecorder.ts`**: Browser plumbing only: `getUserMedia({ audio: { channelCount: 1, echoCancellation, noiseSuppression, autoGainControl } })` (all three default to `true`, overridable via `audioConstraints` for A/B tests), `AudioWorkletNode` via inline Blob URL with `ScriptProcessorNode` fallback, Start/Stop lifecycle. Delegates every signal-processing step to `ChunkPipeline`. `stop()` is idempotent, so Stop + device-unplug cannot submit the final chunk twice. Records numeric capture facts (`getDiagnostics()`: AudioContext rate and the DSP flags the browser actually applied).
++- **`chunkPipeline.ts`**: Pure, unit-tested pipeline: raw device-rate blocks -> `StreamingResampler` -> `SpeechSegmenter` (default `speech` mode) or the legacy fixed 3.0 s chunker (`fixed` mode) -> 16-bit WAV -> `AudioChunkPayload` (`sessionId`, monotonically increasing `chunkIndex`, `isFinal`). `finish()` returns the final chunk once; later calls return `[]`.
++- **`resampler.ts`**: `StreamingResampler` (stateful, windowed-sinc, integer-rational output positions, unity DC gain, cutoff just below the 8 kHz target Nyquist). It carries fractional phase and filter history across the 128-sample AudioWorklet blocks. The previous implementation resampled each block independently, which (measured by `npm run analyze:resampler`) stretched the timeline by +0.78 % at 48 kHz / -0.95 % at 44.1 kHz, mis-pitched tones, and aliased content above 8 kHz into the speech band. `resampleTo16k()` (whole buffers only) now uses the same algorithm; `downmixToMono`, `calculateRms` unchanged.
++- **`speechSegmenter.ts`**: Energy-based boundary finder (20 ms frames, adaptive noise floor, speech threshold `max(0.010, 3 x floor)`). A segment starts at speech onset with 300 ms pre-roll, ends after 700 ms of non-speech (trailing pad 250 ms), is split at the quietest point in the last second if it reaches 12 s (soft split on a 250 ms pause after 8 s), and is discarded if it contains < 200 ms of speech-level energy (clicks, bumps, breath). It is **not** a speech recogniser: it only gates and finds boundaries. Thresholds are options and must be validated on a real microphone.
++- **`wavEncoder.ts`**: Encodes 16 kHz Float32 PCM into a 44-byte-header 16-bit PCM RIFF/WAVE `Uint8Array` and reports whole-chunk RMS; chunks below RMS `0.005` are flagged silent and never sent.
++- **`transcriptionQueue.ts`**: Strict FIFO sequential worker (never two `whisper-cli.exe` at once). Session-ID validation drops stale chunks and stale in-flight results; **duplicate `(sessionId, chunkIndex)` submissions are ignored**; backpressure (`maxQueueDepth = 3`) drops the oldest non-final chunk, counts it (`getDroppedCount()`), and never drops the final chunk.
++- **`transcriptAccumulator.ts`**: `SegmentGate` accepts a segment only if it belongs to the active session and its `chunkIndex` is strictly greater than the last accepted one; `appendSegmentText` joins with single spaces and never drops words. This replaces a text-based `endsWith()` check that silently erased genuinely repeated speech.
++- **`electron/vocabularyConfig.ts`**: `cleanWhisperOutput(raw)` returns `{ raw, text, markersRemoved, loopTrimmed }`. (1) `filterWhisperMarkers` removes only non-speech annotations: any short `[bracketed]` span, parenthesised sound descriptions (`(applause)`, `(whirring)`), and music notes. (2) `trimRepetitionLoops` trims a decoder loop (a word repeated >= 8 times, or a 2-4 word phrase repeated >= 5 times) to one occurrence; ordinary emphasis ("no no no no no") is untouched. The former regex list that deleted phrases such as "the channel is called ...", "thanks for watching" and a trailing "happy?" was **removed** because it deleted genuine speech. `raw` is retained for diagnostics only and is never sent to the renderer or logged by default. The optional technical-vocabulary prompt is OFF by default (opt in with `WHISPER_USE_VOCAB_PROMPT=1`, or `WHISPER_INITIAL_PROMPT`).
++- **`electron/whisperConfig.ts`**: `buildWhisperCliArgs()` is the single source of the CLI argument vector: `-m <model> -f <wav> -oj -of <prefix> -t <threads> -np` plus `--prompt <text>` only when configured. No decoder flags (`-sns`, `-nf`, `-nth`, `-mc` ...) are passed; whisper.cpp defaults apply (temperature fallback on, no-speech threshold 0.6, entropy threshold 2.4, log-prob threshold -1.0).
+ 
+ ## 4. Ollama LLM Service Architecture (`electron/ollamaService.ts`)
+ 
+@@ -189,7 +191,7 @@
+ - Treats conversation transcripts as untrusted context.
+ - Bounds input length to 12,000 characters (truncates older conversation while preserving recent tail).
+ - Demarcates input with strict delimiters (`--- BEGIN TRANSCRIPT ---` / `--- END TRANSCRIPT ---`).
+-- Enforces strict system instructions: base response exclusively on the transcript, acknowledge incomplete context politely, and avoid fabricated facts.
++- System prompt treats the transcript as imperfect speech recognition: infer the most plausible question, answer a reasonably clear question directly and concisely without repeating garbled fragments or asking needless follow-ups, state a corrected-term assumption briefly ("Assuming you mean LangChain, ..."), ask exactly one short clarifying question only when genuinely ambiguous, never fabricate facts. It contains no rule tailored to specific transcription artefacts, so it cannot mask transcription faults.
+ 
+ ### 3. Streaming Chat Engine & Cancellation (`electron/ollamaService.ts`)
+ - Communicates with Ollama's native endpoint: `POST /api/chat` with `{ stream: true }`.
+@@ -244,14 +246,14 @@
+     User->>UI: Clicks "Start"
+     UI->>Rec: start(onChunk)
+     Rec->>Rec: getUserMedia({ audio: true })
+-    Rec->>Rec: AudioContext + AudioWorklet (16 kHz resample)
+-    Note over Rec: Accumulates 3.0s window (48,000 samples)
++    Rec->>Rec: AudioContext + AudioWorklet (128-sample blocks)
++    Note over Rec: ChunkPipeline: StreamingResampler -> SpeechSegmenter
+ 
+-    loop Every 3.0 Seconds of Audio
+-        Rec->>Rec: encodeWav16kMono(samples)
+-        alt Chunk is Silent (RMS < 0.005)
+-            Note over Rec: Discard silent chunk locally
+-        else Chunk contains Speech
++    loop Each completed utterance (pause >= 700 ms, or <= 12 s)
++        Rec->>Rec: encodeWav16kMono(utterance samples)
++        alt Segment has < 200 ms of speech-level energy
++            Note over Rec: Never emitted (click / noise / silence)
++        else Segment contains speech
+             Rec->>Queue: enqueue(wavBytes)
+             Queue->>UI: onStateChange(isTranscribing: true)
+             Queue->>Preload: transcribeAudioChunk(wavBytes)
+@@ -268,18 +270,19 @@
+ 
+     User->>UI: Clicks "Stop"
+     UI->>Rec: stop()
+-    Rec->>Rec: Flush final chunk if >= 0.5s (8,000 samples)
++    Rec->>Rec: finish(): flush open utterance once (isFinal)
+     Rec->>Rec: Release MediaStream tracks & close AudioContext
+-    UI->>Queue: drain() (finish in-flight chunk)
+-    Queue->>UI: onStateChange(isTranscribing: false)
++    Queue->>UI: onStatusChange(isProcessing / pendingCount)
++    Note over UI: Suggest Answer enabled only when queue is idle
+     UI->>UI: setStatus('Stopped')
+ ```
+ 
+ ### Audio Architecture Highlights:
+-1. **Inline AudioWorklet**: AudioWorklet processor code is packaged into an inline `Blob` URL so it loads consistently across both development Vite HMR and packaged `file://` protocols, with graceful degradation to `ScriptProcessorNode` if unsupported.
+-2. **Client-Side Silence Rejection**: Evaluating RMS energy in `wavEncoder.ts` prior to IPC invocation prevents spawning native processes when the user is not speaking, drastically cutting CPU overhead.
+-3. **Non-Overlapping Chunks**: Audio chunks are partitioned into distinct 3.0-second non-overlapping windows to avoid duplicate words in the live transcript.
+-4. **Sequential Processing & Backpressure**: `TranscriptionQueue` processes one chunk at a time, enforcing an absolute ceiling (`maxQueueDepth = 3`). If Whisper inference takes longer than real-time on lower-power CPUs, older pending chunks are safely dropped to prevent latency accumulation and memory growth.
+-5. **Session Isolation**: Each recording cycle is assigned a unique `sessionId`. When the user clicks "Stop" and "Start" again, all queued chunks from superseded sessions are rejected immediately without executing Whisper.
+-6. **Technical Vocabulary Initial Prompt**: `vocabularyConfig.ts` supplies a curated technical vocabulary context passed via `--prompt` to `whisper-cli.exe`, dramatically improving proper noun recognition (e.g., `LangChain`, `LLM`, `RAG`, `React`, `TypeScript`) while preserving non-technical words (`link chain`) in normal contexts.
+-7. **Whisper Marker Suppression & Filtering**: Non-speech acoustic markers (e.g., `[BLANK_AUDIO]`, `[MUSIC]`, `[SILENCE]`, `(applause)`) are filtered cleanly from user-facing text before IPC dispatch, and non-speech tokens are suppressed natively via the `-sns` flag.
++1. **Inline AudioWorklet**: Worklet code is packaged into an inline `Blob` URL so it loads in Vite dev and packaged `file://` modes, with graceful fallback to `ScriptProcessorNode`.
++2. **One stateful resampler per recording**: filter history and fractional output position persist across blocks (see `resampler.ts` above).
++3. **Utterance segmentation instead of blind 3.0 s cuts**: cuts fall in pauses, so words are not split, and non-speech (room noise, breath, the click on "Stop", trailing silence) is not sent to Whisper, removing the main opportunity for it to invent filler. There is **no overlap** between segments, therefore no overlap-deduplication logic exists or is needed. `segmentation: 'fixed'` restores the old behaviour for A/B comparison.
++4. **Sequential Processing & Backpressure**: one chunk at a time; ceiling `maxQueueDepth = 3`; drops are counted; final chunk protected.
++5. **Session Isolation & identity-based de-duplication**: unique `sessionId` per recording; queue ignores duplicate `(session, chunk)`; `SegmentGate` ignores late/out-of-order/foreign-session results.
++6. **Context never leaks between chunks**: each chunk is a separate `whisper-cli` process, and whisper.cpp's `no_context` default is true, so no decoded text is carried from one chunk to the next. Repetition inside a transcript therefore comes from the decoder within one chunk, not from earlier chunks (verified in whisper.cpp source `whisper_full_with_state`).
++7. **Initial prompt (optional, off by default)**: `--prompt` is injected into the single decode window of *every* chunk. Treat it as an experiment to be measured (`npm run diagnose:whisper`), not a fix.
++8. **Output cleaning with raw/clean separation**: see `vocabularyConfig.ts` above. Transcript text is never logged unless `DEBUG_AUDIO=1` **and** `DEBUG_WHISPER_TEXT=1`.
+--- a/docs/CHANGELOG.md
++++ b/docs/CHANGELOG.md
+@@ -6,6 +6,37 @@
+ 
+ ---
+ 
++## [Phase 4: Transcription Pipeline Regression Fix] - 2026-11-02
++
++> Status: automated and synthetic-audio verification complete. **Real-microphone and real-Whisper verification is pending** on the user's Windows machine (see `TESTING_AND_VALIDATION.md` section 3). The single root cause of the user's three reported transcripts is **not** conclusively proven; see `IMPLEMENTATION_STATUS.md` Observation 3.
++
++### Fixed
++- **Resampler (`src/audio/resampler.ts`)**: replaced per-128-sample-block stateless resampling with a stateful windowed-sinc `StreamingResampler`. Measured before/after (10 s tones, 128-sample blocks): 48 kHz output 161250 -> 160000 samples, 1 kHz tone 992.25 -> 1000.00 Hz, SDR 25.8 -> 111 dB, 10 kHz alias leak -12.5 -> -44.9 dB; 44.1 kHz 158485 -> 160000 samples, 1009.55 -> 1000.00 Hz, SDR 12.0 -> 111 dB, leak -7.1 -> -48.6 dB.
++- **Chunking (`src/audio/speechSegmenter.ts`, `chunkPipeline.ts`, `audioRecorder.ts`)**: blind 3.0 s cuts replaced by pause-aligned utterance segments with pre-roll/trailing pad, click/breath rejection and quiet-point splitting; non-speech is no longer sent to Whisper. Legacy behaviour available as `segmentation: 'fixed'`. Final chunk is emitted exactly once.
++- **Transcript accumulation (`src/audio/transcriptAccumulator.ts`, `src/App.tsx`)**: identity-based guard (session + strictly increasing chunk index) replaces the `endsWith` text comparison that dropped genuinely repeated speech.
++- **Queue (`src/audio/transcriptionQueue.ts`)**: duplicate `(session, chunk)` submissions ignored; dropped chunks counted.
++- **Suggest Answer race (`src/App.tsx`)**: disabled while any chunk is transcribing or queued, so answers are not built from a truncated transcript.
++- **Whisper output cleaning (`electron/vocabularyConfig.ts`)**: removed the regex deny-list that deleted genuine speech ("the channel is called ...", "thanks for watching", trailing "happy?"). Now strips only non-speech annotations and trims a decoder repetition loop (>= 8 identical words / >= 5 repeats of a 2-4 word phrase) to one occurrence. Raw and cleaned text are kept separate (`TranscriptionResult.rawText`).
++- **Logging (`electron/main.ts`, `electron/whisperService.ts`, renderer)**: transcript text is no longer logged in non-production runs. `DEBUG_AUDIO=1` logs metadata only; text additionally requires `DEBUG_WHISPER_TEXT=1`.
++- **`WhisperService.transcribe`**: input audio is validated (and silence short-circuited) before the Whisper environment check.
++- **Ollama prompt (`electron/promptBuilder.ts`)**: removed the rule tailored to YouTube/subscription artefacts; new general imperfect-transcript policy (answer clear questions directly, disclose a corrected-term assumption briefly, one short clarification only if genuinely ambiguous, no echoing of garbled fragments). Not verified against a live model.
++
++### Changed
++- Whisper CLI arguments are produced by one tested function (`buildWhisperCliArgs`): `-m -f -oj -of -t -np` [+ `--prompt` only when configured]. No decoder flags. Flags confirmed to exist in current whisper.cpp source; the user's installed build is probed by `npm run diagnose:whisper`.
++- The technical-vocabulary prompt remains OFF by default and is now an explicit opt-in (`WHISPER_USE_VOCAB_PROMPT=1`).
++
++### Added
++- `scripts/test-pipeline-regression.ts` (`npm run test:pipeline`, 119 assertions), `scripts/analyze-resampler.ts` (`npm run analyze:resampler`), `scripts/diagnose-whisper.ts` (`npm run diagnose:whisper`), `scripts/make-speech-fixtures.ps1`.
++- Opt-in numeric capture diagnostics (AudioContext rate, DSP flags actually applied).
++
++### Documentation corrections
++- Removed stale claims that `-sns`/`-nf`/`-nth` are enabled by default, that Stop "drains" the queue, that the filter is "non-destructive" while it deleted phrases, and the inconsistent assertion counts (44/47 vs actual 28).
++
++### Not changed
++Electron security settings, preload/IPC contracts, microphone permission flow, Start/Stop lifecycle, UI design, local-only architecture, models.
++
++---
++
+ ## [Phase 4: Transcription Accuracy & Decoding Stabilization] - 2026-11-01
+ 
+ ### Reverted & Stabilized
+--- a/docs/CONFIGURATION.md
++++ b/docs/CONFIGURATION.md
+@@ -34,8 +34,10 @@
+ | **`WHISPER_ENGINE`** | String | `cli` | Whisper engine mode: `'cli'` for atomic CLI invocation, or `'server'` for HTTP daemon mode. |
+ | **`WHISPER_HOST`** | String | `127.0.0.1` | Host interface for `whisper-server.exe`. |
+ | **`WHISPER_PORT`** | Number | `8080` | Port for `whisper-server.exe`. |
+-| **`WHISPER_INITIAL_PROMPT`** | String | *(unset / empty)* | Optional initial prompt string passed as `--prompt` to Whisper to condition vocabulary recognition. Defaults to empty for clean baseline decoding. |
+-| **`DEBUG_AUDIO`** | String | *(unset)* | Set to `"1"` to enable verbose dev console diagnostics for audio chunk energy, Whisper CLI transcription timings, and raw vs cleaned output. |
++| **`WHISPER_INITIAL_PROMPT`** | String | *(unset / empty)* | Optional initial prompt string passed as `--prompt` to Whisper to condition vocabulary recognition. Defaults to empty for clean baseline decoding. Takes precedence over `WHISPER_USE_VOCAB_PROMPT`. |
++| **`WHISPER_USE_VOCAB_PROMPT`** | String | *(unset)* | Set to `"1"` to opt in to the curated technical-vocabulary prompt (`buildInitialPrompt()`). OFF by default until `npm run diagnose:whisper` shows a measured benefit. |
++| **`DEBUG_WHISPER_TEXT`** | String | *(unset)* | With `DEBUG_AUDIO=1`, additionally logs raw vs cleaned transcript text in the main process. Conversation content: leave unset normally. |
++| **`DEBUG_AUDIO`** | String | *(unset)* | Set to `"1"` to log metadata only (effective Whisper arguments, durations, character counts, flags). No audio, no transcript text. In the renderer the equivalent switch is `localStorage.setItem('DEBUG_AUDIO','1')`. |
+ 
+ ### Ollama Configuration (Phase 3)
+ | Variable | Type | Default | Description |
+@@ -60,8 +62,10 @@
+ | Parameter | Value | Component | Description |
+ | :--- | :---: | :--- | :--- |
+ | **Microphone Channel Count** | `1` (Mono) | `AudioRecorder` | Audio constraints request single-channel mono with echo cancellation, noise suppression, and auto gain control. |
+-| **Internal Target Sample Rate** | `16,000 Hz` | `resampler.ts` | All incoming hardware audio (44.1kHz, 48kHz, etc.) is resampled to 16kHz via anti-aliasing linear interpolation. |
+-| **Target Chunk Duration** | `3.0 seconds` | `AudioRecorder` | Exactly 48,000 samples @ 16kHz. Yields optimal balance between latency and transcription accuracy. |
++| **Internal Target Sample Rate** | `16,000 Hz` | `resampler.ts` | All incoming hardware audio (44.1kHz, 48kHz, etc.) is resampled to 16kHz by one stateful windowed-sinc `StreamingResampler` per recording. |
++| **Segmentation mode** | `speech` (default) / `fixed` | `AudioRecorder` option `segmentation` | `speech`: utterances cut at pauses. `fixed`: legacy 3.0 s (48,000-sample) blind cuts, kept for A/B tests. |
++| **Segmenter thresholds** | frame 20 ms; speech RMS > max(0.010, 3 x noise floor); min speech 200 ms; hangover 700 ms; pre-roll 300 ms; trailing pad 250 ms; soft max 8 s; hard max 12 s | `SpeechSegmenterOptions` | Energy only; tune on real hardware. |
++| **Browser DSP** | echoCancellation, noiseSuppression, autoGainControl all `true` | `AudioRecorder` option `audioConstraints` | Unchanged defaults; candidates for A/B testing. |
+ | **Minimum Final Chunk Duration**| `0.5 seconds` | `AudioRecorder` | Exactly 8,000 samples @ 16kHz. When the user clicks Stop, partial audio shorter than 0.5s is discarded to prevent incomplete word artifacts. |
+ | **Silence Gating Threshold** | `0.005` RMS | `AudioRecorder` / `wavEncoder` | Buffers with RMS energy below 0.005 are flagged as silent and bypass `whisper-cli.exe` execution. |
+ | **Maximum Queue Backpressure** | `3 chunks` | `TranscriptionQueue` | Limits pending transcription backlog to 3 items. If CPU is under heavy load, drops excess unstarted chunks to prevent memory bloat. |
+@@ -94,7 +98,7 @@
+ | **Maximum Transcript Length** | 12,000 chars | If transcript exceeds this limit, older conversation is trimmed while preserving the most recent context and appending a truncation notice. |
+ | **Context Fencing** | `--- BEGIN TRANSCRIPT ---` / `--- END TRANSCRIPT ---` | Explicit demarcation boundaries prevent prompt injection and model confusion. |
+ | **Default Temperature** | `0.7` | Balances concise response generation with conversational fluidity. |
+-| **Speech-Aware Conversational Framing** | System Prompt Instructions | Instructs model to expect real-time speech transcripts, infer speaker intent despite minor acoustic imperfections, explain technical concepts (LangChain, LLMs, RAG) concisely using domain knowledge, and ignore stray transcription noise or YouTube boilerplate hallucinations. |
++| **Speech-Aware Conversational Framing** | System Prompt Instructions | Instructs model to expect real-time speech transcripts, infer speaker intent despite minor acoustic imperfections, explain technical concepts (LangChain, LLMs, RAG) concisely using domain knowledge, answer clear questions directly, state an assumed corrected term briefly, ask one short clarifying question only when genuinely ambiguous, and never comment on transcription errors. |
+ 
+ ---
+ 
+--- a/docs/IMPLEMENTATION_STATUS.md
++++ b/docs/IMPLEMENTATION_STATUS.md
+@@ -28,9 +28,9 @@
+ | **Stream Cancellation Support** | `Verified` | `electron/ollamaService.ts`, `electron/main.ts` | Aborts active HTTP stream via `AbortController`; verified in `test:ollama`. | Resets `isGenerating` cleanly. | Verified in unit tests. |
+ | **Single-Request Concurrency Guard**| `Verified` | `electron/ollamaService.ts` | Locks generation synchronously; second concurrent request rejected with descriptive error. | Prevents CPU saturation. | Verified in `test:ollama`. |
+ | **Automated Ollama Test Suite** | `Verified` | `scripts/test-ollama.ts` | `npm run test:ollama` passes 36 / 36 tests with zero failures. | Deterministic mock HTTP server. | Can run without live Ollama daemon. |
+-| **Microphone Capture & Resampling** | `Verified (Automated)` | `src/audio/audioRecorder.ts`, `src/audio/resampler.ts` | Downmixing, 48k/44.1k/16k linear resampling, identity tests in `test:audio` (7 assertions). | Hardware testing pending user run on physical mic. | Verified in unit suite. |
++| **Microphone Capture & Resampling** | `Verified (Automated)` | `src/audio/audioRecorder.ts`, `src/audio/resampler.ts` | Streaming resampler, segmenter and pipeline covered by `test:pipeline` (119 assertions, synthetic audio) and `test:audio` (22). | **Physical-microphone verification NOT done.** | Automated only. |
+ | **WAV Encoder & Silence Gate** | `Verified (Automated)` | `src/audio/wavEncoder.ts` | 44-byte RIFF header generation, RMS detection, validator integration in `test:audio` (8 assertions). | RMS threshold fixed at 0.005. | Verified against main wavValidator. |
+-| **Sequential Queue & Backpressure** | `Verified (Automated)` | `src/audio/transcriptionQueue.ts` | Strict sequential FIFO, concurrency <= 1, session invalidation, backpressure cap in `test:audio` (7 assertions). | Drops older chunks when depth exceeds 3. | Prevents CPU saturation. |
++| **Sequential Queue & Backpressure** | `Verified (Automated)` | `src/audio/transcriptionQueue.ts` | Strict sequential FIFO, concurrency <= 1, session invalidation, duplicate prevention, bounded backpressure with protected final chunk (`test:audio`, `test:pipeline`). | Drops older chunks when depth exceeds 3 (counted). | Prevents CPU saturation. |
+ | **IPC Chunk Transcription Bridge** | `Verified` | `electron/main.ts`, `electron/preload.ts` | Typed IPC handler `whisper:transcribe-chunk` validates WAV and transcribes via `WhisperService`. | Exposes clean, non-node API. | Verified in build & smoke launch. |
+ | **Live Transcript Appending** | `Verified` | `src/App.tsx` | Transcribed text progressively appends to transcript panel; clean Start/Stop lifecycle. | Relies on local whisper.cpp execution. | Tested in build and smoke launch. |
+ 
+@@ -55,13 +55,19 @@
+ 
+ ### Observation 1: Whisper Sample Rate Resampling (RESOLVED)
+ - **Status:** Resolved in Phase 4.
+-- **Resolution:** `src/audio/resampler.ts` explicitly downsamples all browser audio streams (44.1 kHz or 48 kHz) to 16,000 Hz single-channel mono PCM with linear interpolation before WAV encoding and IPC transfer.
++- **Resolution:** `src/audio/resampler.ts` explicitly downsamples all browser audio streams (44.1 kHz or 48 kHz) to 16,000 Hz single-channel mono PCM with a stateful windowed-sinc `StreamingResampler` before WAV encoding and IPC transfer. (The original implementation resampled each 128-sample block independently and was found to distort timing/pitch and alias high frequencies; fixed in the transcription-regression pass, see Observation 3.)
+ 
+ ### Observation 2: Single Validation Check on Mount
+ - **Finding:** The React UI checks Whisper and Ollama readiness once when the app mounts. If the user starts Ollama or downloads a model while the app is running, they must restart the app to clear the `Unavailable` badge.
+ - **Risk Level:** Low.
+ - **Recommendation for Phase 5:** Expose a "Re-check Environment" button in the warning boxes.
+ 
++### Observation 3: Transcription regression pass (Phase 4 follow-up) - STATUS: fixes implemented, hardware verification PENDING
++- **Confirmed defects fixed (evidence in `test:pipeline`, `analyze:resampler`):** per-block resampler distortion (+0.78 % / -0.95 % time-scale error, 12-26 dB SDR, 10 kHz tone passing at -12.5 / -7.1 dB); blind 3.0 s cuts that split words and send trailing silence/noise/clicks to Whisper; text-based `endsWith` dedupe that erased genuinely repeated speech; Suggest Answer enabled while the final chunk was still being transcribed; regex deny-list deleting genuine words; transcript text logged to the console in any non-production run; docs that contradicted the code (`-sns`/`-nf`/`-nth` described as enabled; "drain on Stop" that did not exist).
++- **Not confirmed:** the single root cause of the user's three observed transcripts. Without the original raw per-chunk Whisper output, the audio, the whisper.cpp version, or Git history, it is not possible to prove it from the ZIP. Best-supported diagnosis: Test 2 (prompt-regurgitation phrasing) matches a vocabulary prompt injected into every short chunk; Test 3 ("bye" x14) matches the decoder-loop failure that the repository's own CHANGELOG attributes to `-sns` + `-nf` combined with non-speech audio; both are compounded by the pipeline defects above. The ZIP's code no longer passes those flags or a default prompt.
++- **Pending (user hardware):** the checklist in `TESTING_AND_VALIDATION.md` section 3 and `npm run diagnose:whisper`. Nothing there is marked complete.
++- **Open decisions requiring evidence:** whether browser noise suppression / auto-gain help or hurt on this microphone; whether any vocabulary prompt measurably helps (kept OFF); segmenter thresholds on real hardware.
++
+ ---
+ 
+ ## 5. Manual Dependencies & Blockers
+--- a/docs/TESTING_AND_VALIDATION.md
++++ b/docs/TESTING_AND_VALIDATION.md
+@@ -274,109 +274,31 @@
+ 
+ ---
+ 
+-### Test 1.8: Transcription Accuracy, Hallucination Suppression & Answer Relevance Suite (Phase 4 Tuning)
+-- **Purpose:** Executes 44 unit and integration assertions covering:
+-  1. Internal Whisper marker filtering (`[BLANK_AUDIO]`, `[MUSIC]`, `(applause)`) and YouTube boilerplate hallucination stripping.
+-  2. Technical vocabulary initial prompt generation (`DEFAULT_TECHNICAL_VOCABULARY`, bounds, overrides).
+-  3. Service-level configuration and flags (`noFallback: true` [`-nf`], `noSpeechThreshold: 0.60` [`-nth`]).
+-  4. End-to-end comparative speech recognition & silence handling:
+-     - Pure silence WAV verification (proves zero hallucinations).
+-     - "I would like to know about LangChain."
+-     - "Explain what LangChain is."
+-     - "What is a vector database?"
+-     - Non-technical control sentence: "There is a link chain on the wall." (verifies zero false positives).
+-  5. Speech-aware PromptBuilder formatting and Ollama answer relevance on spoken transcripts.
+-- **Command:**
+-  ```powershell
+-  npm run test:accuracy
+-  ```
+-- **Expected Result:** All 44 assertions pass with 0 failures; exit code 0.
+-- **Actual Result (Executed Nov 1, 2026):**
+-  ```text
+-  =====================================================
+-     Transcription Accuracy & Relevance Test Suite
+-  =====================================================
+-
+-  [Group 1/5] Internal Marker & Silence Hallucination Filtering
+-    ✅ PASS: Standalone [BLANK_AUDIO] filters to empty string
+-    ✅ PASS: Whitespace-padded [BLANK_AUDIO] filters to empty string
+-    ✅ PASS: Repeated [BLANK_AUDIO] tokens filter to empty string
+-    ✅ PASS: Trailing [BLANK_AUDIO] stripped without altering valid speech
+-    ✅ PASS: Leading [BLANK_AUDIO] stripped without altering valid speech
+-    ✅ PASS: Acoustic markers ([MUSIC], (applause)) stripped from mid-sentence
+-    ✅ PASS: Pure non-speech tokens filter to empty string
+-    ✅ PASS: Genuine speech without markers is preserved verbatim
+-    ✅ PASS: Filters YouTube channel and subscription boilerplate completely
+-    ✅ PASS: Strips YouTube outro hallucinations from mixed speech
+-    ✅ PASS: Filters outro "Thank you for watching / subscribe" boilerplate to empty
+-
+-  [Group 2/5] Vocabulary & Initial Prompt Configuration
+-    ✅ PASS: Core vocabulary includes "LangChain" ... "TypeScript"
+-    ✅ PASS: Default prompt contains core technical keywords
+-    ✅ PASS: Default prompt length is within safe context bounds (73 chars < 800)
+-    ✅ PASS: Disabled option yields empty prompt
+-    ✅ PASS: Direct customPrompt override is respected
+-    ✅ PASS: Extra vocabulary terms appended correctly
+-
+-  [Group 3/5] Whisper Service Configuration & Hallucination Prevention Flags
+-    ✅ PASS: WhisperService has noFallback enabled by default (-nf)
+-    ✅ PASS: WhisperService sets noSpeechThreshold to 0.60 by default (-nth)
+-    ✅ PASS: WhisperService enables non-speech token suppression (-sns) by default
+-    ✅ PASS: WhisperService initializes with concise technical initial prompt
+-
+-  [Group 4/5] End-to-End Transcription Accuracy & Silence Handling
+-    ✅ PASS: Silence audio produced silent/empty result: ""
+-    ✅ PASS: Silence audio did not hallucinate YouTube boilerplate
+-    --- Test: Technical proper noun "LangChain" recognition ---
+-    Spoken:      "I would like to know about LangChain."
+-    Transcribed: "I would like to know about LangChain." (3673ms)
+-    ✅ PASS: Recognized "LangChain" in "I would like to know about LangChain."
+-    ✅ PASS: Proper noun "LangChain" recognized with exact CamelCase
+-    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
+-
+-    --- Test: Question phrasing "Explain what LangChain is" ---
+-    Spoken:      "Explain what LangChain is."
+-    Transcribed: "Explain what LangChain is." (3496ms)
+-    ✅ PASS: Recognized "LangChain" in "Explain what LangChain is."
+-    ✅ PASS: Proper noun "LangChain" recognized with exact CamelCase
+-    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
+-
+-    --- Test: Domain concept "vector database" ---
+-    Spoken:      "What is a vector database?"
+-    Transcribed: "What is a vector database?" (3574ms)
+-    ✅ PASS: Recognized "vector database" in "What is a vector database?"
+-    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
+-
+-    --- Test: Control sentence: "link chain" MUST NOT falsely become "LangChain" ---
+-    Spoken:      "There is a link chain on the wall."
+-    Transcribed: "There is a link chain on the wall." (3432ms)
+-    ✅ PASS: Recognized "link chain" in "There is a link chain on the wall."
+-    ✅ PASS: False positive guard: does not convert "link chain" to "LangChain"
+-    ✅ PASS: Output contains no YouTube channel/subscribe hallucinations
+-
+-  [Group 5/5] Speech-Aware Prompt Builder & Ollama Answer Relevance
+-    ✅ PASS: System prompt explicitly acknowledges speech-to-text transcript context
+-    ✅ PASS: System prompt explicitly guides domain knowledge for LangChain
+-    ✅ PASS: System prompt removes the overly restrictive prohibition against external domain knowledge
+-    Testing Ollama response on speech transcript: "I would like to know about LangChain."...
+-    Ollama Response (678ms):
+-    "Sure, what aspect of LangChain would you like to know more about? It's an open-source library for building AI applications."
+-    ✅ PASS: Ollama correctly explains what LangChain is (framework/library for LLMs)
+-    ✅ PASS: Ollama gives direct answer without stray YouTube or subscription noise
+-
+-  =====================================================
+-  Test Results: 44 / 44 passed (0 failed)
+-  =====================================================
+-  ```
+-- **Status:** `Verified`
+-
+-  =====================================================
+-  Accuracy Test Results: 47 / 47 passed (0 failed)
+-  =====================================================
+-  ```
+-- **Status:** `Verified`
+-
+----
++### Test 1.8: Output Cleaning & Accuracy Suite (`npm run test:accuracy`)
++- **Purpose:** Marker filtering, preservation of genuine speech, optional vocabulary-prompt builder, service configuration cleanliness, and (only when `bin/whisper-cli.exe` + model exist) live recognition checks.
++- **Last executed result (Linux sandbox, no Whisper binary/Ollama):** `29 / 29 passed`; live Whisper and live Ollama sections **skipped**, not passed.
++- **Changed in the transcription-regression fix:** the old assertions that a regex list *deletes* "the channel is called ...", "thanks for watching" etc. were replaced by assertions that such genuine sentences are **preserved**. Earlier text in this document claiming `-nf`, `-sns`, `-nth` are "enabled by default" was stale: those flags are not passed (see `buildWhisperCliArgs`).
++
++### Test 1.9: Transcription Pipeline Regression Suite (`npm run test:pipeline`)
++- **Purpose:** 119 deterministic assertions with synthetic audio and a fake `whisper-cli` executable (no model, no microphone). Groups: (1) streaming resampler block-size invariance, exact length at 48/44.1/32/22.05/8 kHz, 1 kHz pitch, SDR > 60 dB, alias rejection, no block-edge discontinuities; (2) WAV header/round-trip/clipping/silence/validator; (3) segmenter: silence, room noise above the old 0.005 gate, clicks, single and multiple utterances, 0.4 s intra-sentence pause, click after speech, 30 s continuous speech split into bounded segments with no lost/duplicated audio, split lands in a quiet gap; (4) pipeline: chunk indexing, final chunk exactly once, no overlap duplication in fixed mode, pure noise sends nothing; (5) queue: sequential order, duplicate prevention, stale-session discard, bounded backpressure with final chunk protected, error recovery; (6) transcript accumulation: ordering, duplicates, genuine repetition preserved; (7) marker cleaning, genuine speech preserved, loop-guard thresholds incl. the observed "bye" x14 case; (8) `WhisperService` via fake CLI: exact CLI arguments (no decoder flags, `--prompt` only when configured), raw vs cleaned, `[BLANK_AUDIO]`, non-zero exit, malformed JSON, missing output, hang/timeout kill, recovery after each failure, logging policy (nothing logged by default; metadata only with `DEBUG_AUDIO=1`; text only with `DEBUG_WHISPER_TEXT=1` too); (9) synthetic stream -> pipeline -> queue -> fake Whisper -> accumulated transcript.
++- **Platform note:** Group 8 and 9's fake-CLI portion need a POSIX executable and print a skip notice on Windows.
++- **Last executed result:** `119 / 119 passed` (Linux sandbox).
++- **What this does NOT prove:** real Whisper accuracy or real microphone behaviour. The synthetic "speech" is harmonic tones, not speech.
++
++### Test 1.10: Resampler Fidelity Experiment (`npm run analyze:resampler`)
++- Feeds 10 s tones in 128-sample blocks to the legacy per-block resampler (verbatim copy) and the new one. Recorded result:
++
++| Rate | Implementation | Samples (expected 160000) | 1 kHz tone | SDR | 10 kHz tone leaking into output |
++| :--- | :--- | :--- | :--- | :--- | :--- |
++| 48 kHz | legacy | 161250 (+0.78 %) | 992.25 Hz | 25.8 dB | -12.5 dB |
++| 48 kHz | current | 160000 | 1000.00 Hz | 111.0 dB | -44.9 dB |
++| 44.1 kHz | legacy | 158485 (-0.95 %) | 1009.55 Hz | 12.0 dB | -7.1 dB |
++| 44.1 kHz | current | 160000 | 1000.00 Hz | 111.0 dB | -48.6 dB |
++
++### Test 1.11: Real-Whisper A/B Harness (`npm run diagnose:whisper`) - REQUIRES YOUR WINDOWS MACHINE
++- Probes `whisper-cli -h` for the flags the app uses, then runs every WAV in `samples/diagnostics/` under four configurations (current default, explicit no prompt, `LangChain.` prompt, vocabulary prompt) and prints raw vs cleaned text, word-error-rate (when a matching `.txt` holds the expected text) and hallucinated-output counts for empty-reference fixtures. Full output is written to `test_output/` (git-ignored; contains transcript text).
++- Fixtures: `powershell -ExecutionPolicy Bypass -File scripts\make-speech-fixtures.ps1` (Windows SAPI voice: LangChain sentences, plain English, "link chain", short-then-silence, long-with-pauses) and `npm run diagnose:whisper -- --make-nonspeech` (silence, room noise at RMS 0.006, click). Also record the same sentences with your own microphone into the same folder: TTS audio is cleaner than a real microphone.
++- **Status: NOT yet executed against a real binary.** Harness plumbing was smoke-tested with a fake CLI only.
+ 
+ ## 2. Manual Desktop Verification Tests
+ 
+@@ -458,3 +380,21 @@
+ | **Technical Vocabulary & Accuracy** | Accuracy Test (47 assertions) | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
+ | **Whisper Marker Filtering** | Unit Test | Yes | `scripts/test-transcription-accuracy.ts` | ✅ `Verified` |
+ | **Live Mic Hardware Verification**| Manual System Test | No | Interactive Windows Desktop | ⏳ `Pending User Hardware Test` |
++
++
++---
++
++## 3. Manual Windows Verification Checklist (hardware required; none of these are marked done)
++
++| # | Step | Expected | Result |
++| :-- | :--- | :--- | :--- |
++| 1 | `npm run diagnose:whisper` with the fixtures above | Flag probe all required flags present; no loops; `hallucinated-on-empty = 0` for config A | ☐ not run |
++| 2 | `npm run dev`, DevTools console: `localStorage.setItem('DEBUG_AUDIO','1')`, then Start. Console shows `capture settings:` | Note `contextSampleRate` (44100/48000) and whether `noiseSuppression`/`autoGainControl` are true | ☐ not run |
++| 3 | Say "I would like to know about LangChain." then wait 1 s, click Stop | One chunk (`mode: speech`, `reason: pause`), duration about speech length + <= 0.55 s, no extra chunks | ☐ not run |
++| 4 | Start, stay silent 20 s, Stop | Zero chunks in the console, empty transcript | ☐ not run |
++| 5 | Start, say a short sentence, then click Stop immediately and also try 3 s of silence before Stop | No invented trailing text | ☐ not run |
++| 6 | Speak two sentences with a 1.5 s pause | Two chunks, in order, no duplicate text | ☐ not run |
++| 7 | Say "yes ... yes" with a pause between | Both "yes" appear | ☐ not run |
++| 8 | Click Suggest Answer immediately after Stop | Button disabled/hint shown until last audio is transcribed | ☐ not run |
++| 9 | Suggest Answer on the LangChain question | Answer explains LangChain; no talk of channels/subscriptions | ☐ not run (needs Ollama + qwen2.5:3b) |
++| 10 | A/B: set `audioConstraints` `noiseSuppression:false, autoGainControl:false` in `App.tsx`, repeat step 3 | Record whether accuracy changes | ☐ not run |
+--- a/docs/TROUBLESHOOTING.md
++++ b/docs/TROUBLESHOOTING.md
+@@ -127,21 +127,37 @@
+ 
+ ---
+ 
+-### Issue 3.4: Live Transcript doesn't show text when quiet
+-- **Symptom:** The user clicks "Start", the emerald "Listening" badge is visible, but no transcript is added.
+-- **Root Cause:** Silence detection gate (`calculateRms(samples) < 0.005`) deliberately filters out silent ambient background noise so `whisper.cpp` is not invoked unnecessarily.
++### Issue 3.4: Live Transcript doesn't show text
++- **Symptom:** "Listening" is shown but no transcript appears.
++- **Root Cause:** The speech segmenter only emits an utterance after it hears >= 200 ms of speech-level energy (frame RMS above `max(0.010, 3 x noise floor)`) followed by 700 ms of quiet. Very quiet microphones or speech during continuous noise can stay under the threshold. Text also appears only after you pause (not every 3 s).
+ - **Solution:**
+-  Speak clearly into your microphone at normal conversational volume. The "Transcribing audio..." indicator will appear within 3 seconds, followed by the transcribed phrase in the Live Transcript panel.
++  1. Speak at conversational volume and pause ~1 s.
++  2. Enable diagnostics (`localStorage.setItem('DEBUG_AUDIO','1')`, restart recording). Chunk lines show `peakFrameRms` and `noiseFloor`. If `peakFrameRms` of your speech is near 0.01, lower `minSpeechRms` (option `segmenter` in `App.tsx`) or raise the Windows microphone level.
++  3. To compare with the old behaviour, pass `segmentation: 'fixed'` to `AudioRecorder`.
+ 
+ ---
+ 
+-### Issue 3.5: "Dropped audio chunk due to transcription backpressure"
+-- **Symptom:** Console logs show `Dropped audio chunk due to transcription backpressure (queue depth: 3)`.
+-- **Root Cause:** On lower-power CPUs, `whisper.cpp` single-chunk transcription duration might exceed the audio chunk window (3.0 seconds). If Whisper takes > 3.0s per chunk, the queue limits backlog to 3 pending chunks to protect system memory and prevent UI lagging.
+-- **Solution:**
+-  1. Check CPU load in Windows Task Manager.
+-  2. Verify that `WHISPER_THREADS` is set to an appropriate number for your CPU core count (default is 4).
+-  3. Ensure other heavy CPU applications are closed.
++### Issue 3.5: Dropped chunks due to transcription backpressure
++- **Symptom:** Fewer utterances in the transcript than you spoke; with `DEBUG_AUDIO` on, the queue's `getDroppedCount()` is > 0.
++- **Root Cause:** Whisper took longer than the audio arrived and more than 3 chunks were pending; the oldest non-final chunk is dropped (the final chunk never is).
++- **Solution:** Close CPU-heavy apps, set a suitable thread count (default 4), or use a smaller/faster model.
++
++---
++
++### Issue 3.6: Whisper outputs words you did not say, or repeats a phrase ("bye bye bye ...")
++- **How to tell where it comes from:** Whisper only sees what the app sends. Each chunk is a separate `whisper-cli` process with no carried context, so a phrase repeated many times inside one result is generated by the decoder for that audio, not appended by the app. The app trims such a loop (>= 8 identical words or >= 5 repeats of a 2-4 word phrase) to one occurrence, but it does **not** guess other missing/invented words.
++- **Check, in this order:**
++  1. **Effective configuration.** Start with `DEBUG_AUDIO=1` (PowerShell: `$env:DEBUG_AUDIO="1"; npm run dev`). The main process prints `[Whisper config]` with the exact arguments. The expected arguments are `-m -f -oj -of -t 4 -np` and **no** `--prompt`, `-sns`, `-nf`, `-nth`. If you see more, check your environment variables: `echo $env:WHISPER_INITIAL_PROMPT`, `$env:WHISPER_USE_VOCAB_PROMPT`.
++  2. **What was sent.** Chunk lines show duration, `speechSec`, `peakFrameRms`. A chunk that is mostly non-speech, or has very low `peakFrameRms`, points to the audio path.
++  3. **Raw vs cleaned text for one chunk** (conversation content; opt-in): also set `DEBUG_WHISPER_TEXT=1`.
++  4. **Reproduce without the microphone:** `npm run diagnose:whisper` compares prompt/no-prompt on the same files.
++  5. **Microphone DSP.** The capture line prints whether the browser applied noise suppression / automatic gain control. Both can pump background noise up between words. Try disabling them (`audioConstraints` in `App.tsx`) and compare.
++- **Do not** add phrase deny-lists: they delete genuine speech and hide the real fault.
++
++---
++
++### Issue 3.7: Enabling diagnostics safely
++- Nothing is logged by default. Renderer: `localStorage.setItem('DEBUG_AUDIO','1')`. Main process: `DEBUG_AUDIO=1`. Transcript text in logs additionally requires `DEBUG_WHISPER_TEXT=1`. No audio samples are ever logged.
+ 
+ ---
+ 

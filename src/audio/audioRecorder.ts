@@ -1,40 +1,59 @@
 /**
  * Audio Recorder & Microphone Capture Manager (Phase 4)
  *
- * Captures microphone audio using Web Audio API in the Electron renderer,
- * resamples to 16,000 Hz mono PCM, buffers samples into bounded 3.0-second chunks,
- * detects silence, encodes compliant 16-bit PCM WAV chunks, and emits them for transcription.
+ * Captures microphone audio using the Web Audio API in the Electron renderer and hands raw PCM
+ * blocks to ChunkPipeline, which resamples to 16 kHz mono (stateful StreamingResampler), cuts the
+ * stream into utterance segments (SpeechSegmenter) or legacy fixed chunks, and encodes 16-bit PCM WAV.
+ * This class only owns the browser plumbing: permission, AudioContext, worklet, Start/Stop lifecycle.
  */
 
-import { resampleTo16k } from './resampler'
-import { encodeWav16kMono } from './wavEncoder'
+import { ChunkPipeline, AudioChunkPayload, SegmentationMode } from './chunkPipeline'
+import type { SpeechSegmenterOptions } from './speechSegmenter'
+import { isAudioDebugEnabled } from './debug'
 
-export interface AudioChunkPayload {
-  wavBuffer: Uint8Array
-  durationSec: number
-  sampleCount: number
-  rms: number
-  isSilent: boolean
-  chunkIndex: number
-  sessionId: string
-  isFinal: boolean
+export type { AudioChunkPayload } from './chunkPipeline'
+
+export interface AudioConstraintOptions {
+  echoCancellation: boolean
+  noiseSuppression: boolean
+  autoGainControl: boolean
 }
 
 export interface AudioRecorderOptions {
-  /** Target chunk duration in seconds (default: 3.0s = 48000 samples @ 16kHz) */
+  /**
+   * 'speech' (default): pause-aligned utterance segments with non-speech trimmed.
+   * 'fixed': legacy behaviour - blind cuts every chunkDurationSec (kept for A/B comparison).
+   */
+  segmentation?: SegmentationMode
+  /** Fixed mode only: chunk duration in seconds (default 3.0s = 48000 samples @ 16kHz) */
   chunkDurationSec?: number
-  /** Minimum duration in seconds required to flush a final chunk on stop (default: 0.5s) */
+  /** Fixed mode only: minimum duration in seconds required to flush a final chunk on stop (default: 0.5s) */
   minFinalChunkDurationSec?: number
-  /** RMS amplitude threshold below which a chunk is flagged silent (default: 0.005) */
+  /** RMS amplitude threshold below which a whole chunk is flagged silent (default: 0.005) */
   silenceThreshold?: number
+  /** Speech segmenter tuning (speech mode) */
+  segmenter?: SpeechSegmenterOptions
+  /** Browser DSP constraints for getUserMedia (default: all true, unchanged from Phase 4) */
+  audioConstraints?: Partial<AudioConstraintOptions>
   /** Callback fired whenever a chunk is ready for transcription */
   onChunk: (chunk: AudioChunkPayload) => void
   /** Callback fired when an unexpected recording or hardware error occurs */
   onError: (error: Error) => void
 }
 
+export interface AudioCaptureDiagnostics {
+  contextSampleRate: number
+  trackSettings: {
+    sampleRate?: number
+    channelCount?: number
+    echoCancellation?: boolean
+    noiseSuppression?: boolean
+    autoGainControl?: boolean
+  }
+}
+
 export class AudioRecorder {
-  private options: Required<AudioRecorderOptions>
+  private options: AudioRecorderOptions
   private mediaStream: MediaStream | null = null
   private audioContext: AudioContext | null = null
   private sourceNode: MediaStreamAudioSourceNode | null = null
@@ -43,22 +62,16 @@ export class AudioRecorder {
 
   private isRecording = false
   private sessionId = ''
-  private chunkIndex = 0
-  private accumulator: number[] = []
-  private targetChunkSamples: number
-  private minFinalSamples: number
+  private pipeline: ChunkPipeline | null = null
+  private diagnostics: AudioCaptureDiagnostics | null = null
 
   constructor(options: AudioRecorderOptions) {
-    this.options = {
-      chunkDurationSec: options.chunkDurationSec ?? 3.0,
-      minFinalChunkDurationSec: options.minFinalChunkDurationSec ?? 0.5,
-      silenceThreshold: options.silenceThreshold ?? 0.005,
-      onChunk: options.onChunk,
-      onError: options.onError,
-    }
+    this.options = options
+  }
 
-    this.targetChunkSamples = Math.round(this.options.chunkDurationSec * 16000)
-    this.minFinalSamples = Math.round(this.options.minFinalChunkDurationSec * 16000)
+  /** Numeric capture facts (device rate, DSP flags actually applied). Available after start(). */
+  public getDiagnostics(): AudioCaptureDiagnostics | null {
+    return this.diagnostics
   }
 
   public getIsRecording(): boolean {
@@ -82,9 +95,9 @@ export class AudioRecorder {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          echoCancellation: this.options.audioConstraints?.echoCancellation ?? true,
+          noiseSuppression: this.options.audioConstraints?.noiseSuppression ?? true,
+          autoGainControl: this.options.audioConstraints?.autoGainControl ?? true,
         },
         video: false,
       })
@@ -106,8 +119,7 @@ export class AudioRecorder {
 
     this.isRecording = true
     this.sessionId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    this.chunkIndex = 0
-    this.accumulator = []
+    this.pipeline = null
 
     // 2. Initialize AudioContext at native hardware sample rate
     try {
@@ -120,6 +132,32 @@ export class AudioRecorder {
 
       const sourceSampleRate = this.audioContext.sampleRate
       this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream)
+
+      // One stateful pipeline per recording: resampler phase/history must persist across blocks.
+      this.pipeline = new ChunkPipeline({
+        sourceSampleRate,
+        sessionId: this.sessionId,
+        mode: this.options.segmentation ?? 'speech',
+        chunkDurationSec: this.options.chunkDurationSec,
+        minFinalChunkDurationSec: this.options.minFinalChunkDurationSec,
+        silenceThreshold: this.options.silenceThreshold,
+        segmenter: this.options.segmenter,
+      })
+
+      const settings = audioTrack?.getSettings ? audioTrack.getSettings() : {}
+      this.diagnostics = {
+        contextSampleRate: sourceSampleRate,
+        trackSettings: {
+          sampleRate: settings.sampleRate,
+          channelCount: settings.channelCount,
+          echoCancellation: settings.echoCancellation,
+          noiseSuppression: settings.noiseSuppression,
+          autoGainControl: settings.autoGainControl,
+        },
+      }
+      if (isAudioDebugEnabled()) {
+        console.log('[AudioRecorder] capture settings:', JSON.stringify(this.diagnostics), `mode=${this.pipeline.getMode()}`)
+      }
 
       // 3. Try AudioWorklet first; fallback to ScriptProcessorNode
       let workletAttached = false
@@ -145,7 +183,7 @@ export class AudioRecorder {
           this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-capture-processor')
           this.workletNode.port.onmessage = (event) => {
             const rawPcm = event.data as Float32Array
-            this.handlePcmInput(rawPcm, sourceSampleRate)
+            this.handlePcmInput(rawPcm)
           }
 
           this.sourceNode.connect(this.workletNode)
@@ -165,7 +203,7 @@ export class AudioRecorder {
         this.scriptNode = this.audioContext.createScriptProcessor(4096, 1, 1)
         this.scriptNode.onaudioprocess = (event) => {
           const inputData = event.inputBuffer.getChannelData(0)
-          this.handlePcmInput(inputData, sourceSampleRate)
+          this.handlePcmInput(inputData)
         }
         this.sourceNode.connect(this.scriptNode)
         this.scriptNode.connect(this.audioContext.destination)
@@ -179,65 +217,40 @@ export class AudioRecorder {
   }
 
   /**
-   * Receives incoming raw PCM from worklet/node, downsamples to 16kHz,
-   * buffers into 3.0s chunks, and emits chunk events.
+   * Receives incoming raw PCM from the worklet/script node and pushes it through the pipeline.
+   * NOTE: the worklet reuses/transfers its buffer per message, so the block is copied before use.
    */
-  private handlePcmInput(rawPcm: Float32Array, sourceSampleRate: number): void {
-    if (!this.isRecording) return
-
-    // Resample block to 16,000 Hz mono
-    const resampled = resampleTo16k(rawPcm, sourceSampleRate, 16000)
-    for (let i = 0; i < resampled.length; i++) {
-      this.accumulator.push(resampled[i])
-    }
-
-    // Check if accumulator has reached chunk boundary
-    while (this.accumulator.length >= this.targetChunkSamples) {
-      const chunkSamples = new Float32Array(this.accumulator.splice(0, this.targetChunkSamples))
-      this.emitChunk(chunkSamples, false)
+  private handlePcmInput(rawPcm: Float32Array): void {
+    if (!this.isRecording || !this.pipeline) return
+    for (const chunk of this.pipeline.pushPcm(new Float32Array(rawPcm))) {
+      this.emit(chunk)
     }
   }
 
-  /**
-   * Encodes and emits a chunk of 16kHz samples.
-   */
-  private emitChunk(samples: Float32Array, isFinal: boolean): void {
-    const encoded = encodeWav16kMono(samples, 16000, this.options.silenceThreshold)
-
-    if (process.env.NODE_ENV !== 'production') {
+  private emit(chunk: AudioChunkPayload): void {
+    if (isAudioDebugEnabled()) {
       console.log(
-        `[AudioRecorder] Emitting chunk #${this.chunkIndex}: ` +
-        `duration=${encoded.durationSec.toFixed(2)}s, rms=${encoded.rms.toFixed(4)}, silent=${encoded.isSilent}, final=${isFinal}`
+        `[AudioRecorder] chunk #${chunk.chunkIndex}: duration=${chunk.durationSec.toFixed(2)}s ` +
+        `rms=${chunk.rms.toFixed(4)} silent=${chunk.isSilent} final=${chunk.isFinal} ` +
+        `meta=${JSON.stringify(chunk.meta)}`
       )
     }
-
-    this.options.onChunk({
-      wavBuffer: encoded.wavBuffer,
-      durationSec: encoded.durationSec,
-      sampleCount: encoded.sampleCount,
-      rms: encoded.rms,
-      isSilent: encoded.isSilent,
-      chunkIndex: this.chunkIndex++,
-      sessionId: this.sessionId,
-      isFinal,
-    })
+    this.options.onChunk(chunk)
   }
 
   /**
-   * Stops recording, flushes the final partial chunk (if >= 0.5s), and releases all resources.
+   * Stops recording, flushes the final partial chunk exactly once, and releases all resources.
+   * Safe to call repeatedly (second call is a no-op), so Stop + device-unplug cannot double-submit.
    */
   public async stop(): Promise<void> {
     if (!this.isRecording) return
 
     this.isRecording = false
 
-    // Flush final partial chunk if it meets minimum threshold
-    if (this.accumulator.length >= this.minFinalSamples) {
-      const finalSamples = new Float32Array(this.accumulator)
-      this.accumulator = []
-      this.emitChunk(finalSamples, true)
-    } else {
-      this.accumulator = []
+    const pipeline = this.pipeline
+    this.pipeline = null
+    if (pipeline) {
+      for (const chunk of pipeline.finish()) this.emit(chunk)
     }
 
     await this.cleanup()
