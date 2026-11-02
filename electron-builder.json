@@ -1,0 +1,58 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.localai.conversationassistant",
+  "productName": "Local AI Conversation Assistant",
+  "copyright": "Copyright © 2026 Abhijeet Soni",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "bin",
+      "to": "bin",
+      "filter": [
+        "whisper-cli.exe",
+        "whisper-server.exe",
+        "*.dll"
+      ]
+    },
+    {
+      "from": "models",
+      "to": "models",
+      "filter": [
+        "*.bin"
+      ]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Local AI Conversation Assistant",
+    "artifactName": "${productName}-Setup-${version}.${ext}"
+  },
+  "portable": {
+    "artifactName": "${productName}-Portable-${version}.${ext}"
+  },
+  "asar": true
+}

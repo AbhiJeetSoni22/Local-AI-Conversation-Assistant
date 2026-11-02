@@ -9,9 +9,29 @@ export default defineConfig({
     electron({
       main: {
         entry: 'electron/main.ts',
+        vite: {
+          build: {
+            rollupOptions: {
+              onwarn(warning, defaultHandler) {
+                if (warning.message.includes('codeSplitting') || warning.message.includes('platform')) return
+                defaultHandler(warning)
+              },
+            },
+          },
+        },
       },
       preload: {
         input: path.join(__dirname, 'electron/preload.ts'),
+        vite: {
+          build: {
+            rollupOptions: {
+              onwarn(warning, defaultHandler) {
+                if (warning.message.includes('codeSplitting') || warning.message.includes('platform')) return
+                defaultHandler(warning)
+              },
+            },
+          },
+        },
       },
     }),
   ],

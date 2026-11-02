@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { BrowserWindow as BrowserWindowType } from 'electron'
@@ -31,6 +32,14 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 let mainWindow: BrowserWindowType | null = null
 
 function createWindow(): void {
+  const appRoot = process.env.APP_ROOT || path.join(__dirname, '..')
+  const iconCandidates = [
+    path.join(appRoot, 'build', 'icon.ico'),
+    path.join(appRoot, 'build', 'icon.png'),
+    path.join(RENDERER_DIST, 'icon.png'),
+  ]
+  const windowIcon = iconCandidates.find((c) => fs.existsSync(c))
+
   mainWindow = new BrowserWindow({
     width: 960,
     height: 700,
@@ -38,6 +47,7 @@ function createWindow(): void {
     minHeight: 520,
     title: 'Local AI Conversation Assistant',
     backgroundColor: '#0b0c0f',
+    icon: windowIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       // Security enforcement:
@@ -197,7 +207,7 @@ app.whenReady().then(async () => {
   if (process.env.TEST_LAUNCH === '1') {
     setTimeout(() => {
       console.log('TEST_LAUNCH_SUCCESS: Electron window initialized successfully')
-      app.quit()
+      app.exit(0)
     }, 1500)
   }
 

@@ -8,7 +8,7 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ### Issue 1.1: UI displays `Whisper: Unavailable`
 - **Symptom:** The header badge shows a red `Whisper: Unavailable` status and the Live Transcript panel displays a warning card.
-- **Root Cause:** Either the Whisper executable (`whisper-cli.exe`) or the GGML model (`ggml-base.en.bin`) was not found at the expected default paths (`./bin` and `./models`), or paths specified in environment variables are incorrect.
+- **Root Cause:** Either the Whisper executable (`whisper-cli.exe`) or the GGML model (`ggml-base.en.bin`) was not found at the expected default paths (`./bin` and `./models` in dev, or `resources/bin` and `resources/models` in packaged mode), or paths specified in environment variables are incorrect.
 - **Diagnostic Step:**
   Run the standalone validation script in PowerShell:
   ```powershell
@@ -16,8 +16,8 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
   ```
   The script will print the exact missing file and path.
 - **Solution:**
-  1. Ensure `bin/whisper-cli.exe` exists in the project root.
-  2. Ensure `models/ggml-base.en.bin` exists in the project root.
+  1. In development: Ensure `bin/whisper-cli.exe` and `models/ggml-base.en.bin` exist in the project root.
+  2. In packaged mode: The installer automatically includes both files in `<install_dir>\resources\bin` and `<install_dir>\resources\models`.
   3. If stored elsewhere, set environment variables:
      ```powershell
      $env:WHISPER_BIN_PATH="C:\path\to\whisper-cli.exe"
@@ -78,126 +78,45 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 - **Symptom:** Ollama is reachable, but `Ollama: Unavailable` displays: `Model "qwen2.5:3b" is not installed in Ollama. Run: ollama pull qwen2.5:3b`.
 - **Root Cause:** The Ollama daemon is active, but the target model has not been downloaded yet.
 - **Solution:**
-  Open PowerShell or Command Prompt and run:
+  Run the pull command in PowerShell:
   ```powershell
   ollama pull qwen2.5:3b
   ```
-  Once download completes, verify with `ollama list` and refresh the app or run `npm run validate:ollama`.
+  Once complete, click the **"Re-check Ollama"** button in the app header or warning banner.
 
 ---
 
-### Issue 2.3: `A generation request is already in progress`
-- **Symptom:** The user clicks "Suggest Answer" twice quickly and receives this validation error.
-- **Root Cause:** `OllamaService` enforces strict single-request concurrency to prevent multiple overlapping LLM inferences on the CPU.
+## 3. Audio Capture & Transcription Quality Issues (Phase 4 & 5)
+
+### Issue 3.1: Microphone Access Denied or Fails to Start
+- **Symptom:** Clicking **Start** throws `Microphone access denied` or nothing happens.
+- **Root Cause:** Windows Privacy settings have disabled microphone access for desktop apps.
 - **Solution:**
-  Wait for the current response to finish streaming, or click the **Cancel Generation** button.
+  1. Open Windows **Settings** -> **Privacy & Security** -> **Microphone**.
+  2. Ensure **Microphone access** is turned **On**.
+  3. Ensure **Let desktop apps access your microphone** is turned **On**.
 
 ---
 
-## 3. Microphone & Live Audio Capture Issues (Phase 4)
-
-### Issue 3.1: "Microphone access was denied: NotAllowedError"
-- **Symptom:** Clicking "Start" produces an alert banner: `Microphone access was denied. Please allow microphone permissions in Windows Settings (Privacy & security > Microphone).`
-- **Root Cause:** Either the user denied the permission prompt in Electron, or Windows OS privacy settings block desktop apps from accessing the microphone.
+### Issue 3.2: Words Misrecognized (e.g. "LangChain" -> "link chain" or "FastAPI" -> "Fast API")
+- **Symptom:** Speech recognition output sounds phonetically similar but is spelled incorrectly.
+- **Root Cause:** Standard Whisper base English model has general conversational weights and may bias toward everyday vocabulary over modern programming terminology.
 - **Solution:**
-  1. Open Windows **Settings** (`Win + I`).
-  2. Go to **Privacy & security > Microphone**.
-  3. Ensure **Microphone access** is turned **On**.
-  4. Ensure **Let desktop apps access your microphone** is turned **On**.
-  5. Restart the application (`npm run dev`) and click "Start" again.
+  1. Toggle **Tech Vocab** ON in the top action bar to prime Whisper with common framework, library, and tool tokens.
+  2. Click **Edit** in the Conversation Transcript header to correct any misrecognized words in-place before clicking **Suggest Answer**. The LLM prompt builder will receive your edited text cleanly.
 
 ---
 
-### Issue 3.2: "No microphone device detected: NotFoundError"
-- **Symptom:** Clicking "Start" produces an alert: `No microphone device detected. Please connect a microphone and try again.`
-- **Root Cause:** No active audio input device is detected by the operating system or browser environment.
+## 4. Audio & WAV Validation Issues
+
+### Issue 4.1: `Invalid sample rate: X Hz (expected 16000 Hz)`
+- **Symptom:** Submitting a custom WAV file fails validation.
+- **Root Cause:** Whisper GGML models are trained exclusively on 16,000 Hz mono PCM.
 - **Solution:**
-  1. Check your physical microphone or headset connection (USB or 3.5mm jack).
-  2. Open Windows **Sound Settings** and verify that an active input device is selected and responding to test speech.
-  3. If using a Bluetooth headset, ensure it is connected and not exclusively locked in hands-free mode by another app.
-
----
-
-### Issue 3.3: "Microphone is busy or unreadable: NotReadableError"
-- **Symptom:** Clicking "Start" produces: `Microphone is currently unavailable or in use by another application.`
-- **Root Cause:** Another Windows application (such as Microsoft Teams, Zoom, or Discord) has opened the microphone in exclusive mode.
-- **Solution:**
-  1. Close competing voice or video calling software.
-  2. Go to Windows **Sound Control Panel > Recording > [Your Mic] > Properties > Advanced**, and uncheck **"Allow applications to take exclusive control of this device"**.
-
----
-
-### Issue 3.4: Live Transcript doesn't show text
-- **Symptom:** "Listening" is shown but no transcript appears.
-- **Root Cause:** The speech segmenter only emits an utterance after it hears >= 200 ms of speech-level energy (frame RMS above `max(0.010, 3 x noise floor)`) followed by 700 ms of quiet. Very quiet microphones or speech during continuous noise can stay under the threshold. Text also appears only after you pause (not every 3 s).
-- **Solution:**
-  1. Speak at conversational volume and pause ~1 s.
-  2. Enable diagnostics (`localStorage.setItem('DEBUG_AUDIO','1')`, restart recording). Chunk lines show `peakFrameRms` and `noiseFloor`. If `peakFrameRms` of your speech is near 0.01, lower `minSpeechRms` (option `segmenter` in `App.tsx`) or raise the Windows microphone level.
-  3. To compare with the old behaviour, pass `segmentation: 'fixed'` to `AudioRecorder`.
-
----
-
-### Issue 3.5: Dropped chunks due to transcription backpressure
-- **Symptom:** Fewer utterances in the transcript than you spoke; with `DEBUG_AUDIO` on, the queue's `getDroppedCount()` is > 0.
-- **Root Cause:** Whisper took longer than the audio arrived and more than 3 chunks were pending; the oldest non-final chunk is dropped (the final chunk never is).
-- **Solution:** Close CPU-heavy apps, set a suitable thread count (default 4), or use a smaller/faster model.
-
----
-
-### Issue 3.6: Whisper outputs words you did not say, or repeats a phrase ("bye bye bye ...")
-- **How to tell where it comes from:** Whisper only sees what the app sends. Each chunk is a separate `whisper-cli` process with no carried context, so a phrase repeated many times inside one result is generated by the decoder for that audio, not appended by the app. The app trims such a loop (>= 8 identical words or >= 5 repeats of a 2-4 word phrase) to one occurrence, but it does **not** guess other missing/invented words.
-- **Check, in this order:**
-  1. **Effective configuration.** Start with `DEBUG_AUDIO=1` (PowerShell: `$env:DEBUG_AUDIO="1"; npm run dev`). The main process prints `[Whisper config]` with the exact arguments. The expected arguments are `-m -f -oj -of -t 4 -np` and **no** `--prompt`, `-sns`, `-nf`, `-nth`. If you see more, check your environment variables: `echo $env:WHISPER_INITIAL_PROMPT`, `$env:WHISPER_USE_VOCAB_PROMPT`.
-  2. **What was sent.** Chunk lines show duration, `speechSec`, `peakFrameRms`. A chunk that is mostly non-speech, or has very low `peakFrameRms`, points to the audio path.
-  3. **Raw vs cleaned text for one chunk** (conversation content; opt-in): also set `DEBUG_WHISPER_TEXT=1`.
-  4. **Reproduce without the microphone:** `npm run diagnose:whisper` compares prompt/no-prompt on the same files.
-  5. **Microphone DSP.** The capture line prints whether the browser applied noise suppression / automatic gain control. Both can pump background noise up between words. Try disabling them (`audioConstraints` in `App.tsx`) and compare.
-- **Do not** add phrase deny-lists: they delete genuine speech and hide the real fault.
-
----
-
-### Issue 3.7: Enabling diagnostics safely
-- Nothing is logged by default. Renderer: `localStorage.setItem('DEBUG_AUDIO','1')`. Main process: `DEBUG_AUDIO=1`. Transcript text in logs additionally requires `DEBUG_WHISPER_TEXT=1`. No audio samples are ever logged.
-
----
-
-
-### Issue 3.8: Technical terms misrecognized (e.g., "NGINX" as "Yanks", "FastAPI" as "Fast API")
-- **Root Cause:** Small speech recognition models like `ggml-base.en.bin` (142MB) lack specialized domain context for modern software proper nouns without prior decoder conditioning.
-- **Solution:**
-  1. Toggle the **Tech Vocab** button in the top action bar to `On`. This primes Whisper's internal dictionary with curated terms: React, FastAPI, PostgreSQL, Retrieval-Augmented Generation, LangChain, API endpoints, Postman, Docker, NGINX, Python, TypeScript.
-  2. For custom words, set an environment variable before launching:
-     ```powershell
-     $env:WHISPER_EXTRA_VOCABULARY="Kubernetes, GraphQL, Redis"
-     npm run dev
-     ```
-  3. Alternatively, use the **Edit** button on the Conversation Transcript panel to correct any misrecognized words before clicking "Suggest Answer".
-
-### Issue 3.9: Unrelated trailing speech or outro phrases ("Bye bye", "All right...")
-- **Root Cause:** When audio finishes with ambient room sound or a breath, and the user waits before clicking Stop, Whisper's temperature fallback (0.0 -> 1.0) on near-zero speech energy samples common YouTube outro boilerplate.
-- **Solution:**
-  1. `SpeechSegmenter` is tuned with `minSpeechRms: 0.012`, `minSpeechMs: 260ms`, and `hangoverMs: 800ms` to reject clicks and breaths.
-  2. Speak clearly at normal volume into the microphone, pause briefly, and click Stop.
-  3. Avoid moving the microphone or clicking loudly while recording is active.
-
-## 4. Audio & WAV Validation Errors
-
-### Issue 4.1: `Invalid WAV header: expected "RIFF", found ...`
-- **Symptom:** `transcribe()` or `validateWavBuffer()` rejects audio with header error.
-- **Root Cause:** The provided audio file is not an uncompressed RIFF/WAVE file (e.g., MP3, AAC, FLAC).
-- **Solution:**
-  Ensure the audio file is converted to standard WAV format. Using `ffmpeg`:
+  Convert the audio using `ffmpeg`:
   ```powershell
   ffmpeg -i input.mp3 -ar 16000 -ac 1 -c:a pcm_s16le output.wav
   ```
-
----
-
-### Issue 4.2: `Unsupported audio encoding: format code 3 (expected 1)`
-- **Symptom:** The validator rejects the audio with format code 3.
-- **Root Cause:** Format code `3` indicates 32-bit IEEE floating-point PCM. `whisper.cpp` requires 16-bit signed integer linear PCM (format code `1`).
-- **Solution:**
-  Ensure recording tools output 16-bit integer PCM (`pcm_s16le`).
 
 ---
 
@@ -227,7 +146,43 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
-## 6. Checking for Orphaned Processes
+## 6. Packaged Distribution & Windows Release Issues (Phase 6)
+
+### Issue 6.1: Windows Defender SmartScreen "Windows protected your PC"
+- **Symptom:** When running `Local AI Conversation Assistant-Setup-0.1.0.exe` or `Local AI Conversation Assistant-Portable-0.1.0.exe` for the first time, Windows displays a blue SmartScreen warning dialog stating "Unknown publisher".
+- **Root Cause:** This is expected standard Windows behavior for open-source software built without an expensive commercial EV (Extended Validation) code signing certificate.
+- **Solution:**
+  1. Click **More info** on the SmartScreen dialog.
+  2. Click the **Run anyway** button that appears.
+  3. The installer or portable app will launch immediately.
+
+---
+
+### Issue 6.2: Antivirus or File Lock EPERM Error During `npm run dist`
+- **Symptom:** Packaging fails with `EPERM: operation not permitted, rename 'release\win-unpacked.tmp' -> 'release\win-unpacked'`.
+- **Root Cause:** A previously launched instance of `Local AI Conversation Assistant.exe` from `release\win-unpacked` is still running in the background, or Windows Defender has temporarily locked the output folder for scanning.
+- **Solution:**
+  1. Ensure no instances of the app are running:
+     ```powershell
+     Stop-Process -Name "Local AI Conversation Assistant*" -Force -ErrorAction SilentlyContinue
+     ```
+  2. If the problem persists, delete the temporary directory:
+     ```powershell
+     Remove-Item -Path "release\win-unpacked*" -Recurse -Force -ErrorAction SilentlyContinue
+     npm run dist
+     ```
+
+---
+
+### Issue 6.3: Portable Executable Takes 3-5 Seconds to Open
+- **Symptom:** Launching the portable `.exe` has a short delay before the application window appears.
+- **Root Cause:** The portable executable is a self-extracting 7-zip bundle containing Electron and the 148 MB Whisper model. On initial launch, it unpacks its contents to `%LOCALAPPDATA%\Temp` before launching.
+- **Solution:**
+  For the fastest startup time, use the **NSIS Setup Installer** (`Local AI Conversation Assistant-Setup-0.1.0.exe`), which installs uncompressed files directly to `%LOCALAPPDATA%\Programs\local-ai-conversation-assistant` for instantaneous launching.
+
+---
+
+## 7. Checking for Orphaned Processes
 
 The application automatically hooks into `before-quit`, `will-quit`, and `exit` events to kill child processes. If an unexpected crash occurs during development, verify that no lingering processes remain:
 

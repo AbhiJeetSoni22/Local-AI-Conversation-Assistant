@@ -35,6 +35,9 @@ export function getProjectRootDir(): string {
 
 /**
  * Resolves Whisper configuration following standard project conventions.
+ * In packaged Electron apps, resources are resolved from process.resourcesPath.
+ * In development, resources are resolved from the repository root.
+ *
  * Paths can be overridden via environment variables:
  * - WHISPER_BIN_PATH / WHISPER_PATH: Path to whisper-cli.exe or whisper-server.exe
  * - WHISPER_MODEL_PATH: Path to the ggml model file (e.g. ggml-base.en.bin)
@@ -43,25 +46,67 @@ export function getProjectRootDir(): string {
  */
 export function getWhisperConfig(overrides?: Partial<WhisperConfig>): WhisperConfig {
   const rootDir = getProjectRootDir()
+  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath
 
-  const defaultCli = path.join(rootDir, 'bin', 'whisper-cli.exe')
-  const defaultServer = path.join(rootDir, 'bin', 'whisper-server.exe')
-  const defaultModel = path.join(rootDir, 'models', 'ggml-base.en.bin')
+  // In packaged electron apps, extraResources land in process.resourcesPath.
+  // In development and standalone script runners, they are in the project root directory.
+  const candidateBinDirs = [
+    resourcesPath ? path.join(resourcesPath, 'bin') : null,
+    path.join(rootDir, 'bin'),
+    path.join(process.cwd(), 'bin'),
+  ].filter((d): d is string => Boolean(d && fs.existsSync(d)))
+
+  const candidateModelDirs = [
+    resourcesPath ? path.join(resourcesPath, 'models') : null,
+    path.join(rootDir, 'models'),
+    path.join(process.cwd(), 'models'),
+  ].filter((d): d is string => Boolean(d && fs.existsSync(d)))
 
   // Resolve executable path
   let binPath = process.env.WHISPER_BIN_PATH || process.env.WHISPER_PATH || overrides?.binPath
   if (!binPath) {
-    if (fs.existsSync(defaultCli)) {
-      binPath = defaultCli
-    } else if (fs.existsSync(defaultServer)) {
-      binPath = defaultServer
-    } else {
-      binPath = defaultCli
+    for (const dir of candidateBinDirs) {
+      const cliCandidate = path.join(dir, 'whisper-cli.exe')
+      if (fs.existsSync(cliCandidate)) {
+        binPath = cliCandidate
+        break
+      }
+      const srvCandidate = path.join(dir, 'whisper-server.exe')
+      if (fs.existsSync(srvCandidate)) {
+        binPath = srvCandidate
+        break
+      }
+    }
+    if (!binPath) {
+      const primaryBinDir = candidateBinDirs[0] || (resourcesPath ? path.join(resourcesPath, 'bin') : path.join(rootDir, 'bin'))
+      binPath = path.join(primaryBinDir, 'whisper-cli.exe')
     }
   }
 
   // Resolve model path
-  const modelPath = process.env.WHISPER_MODEL_PATH || overrides?.modelPath || defaultModel
+  let modelPath = process.env.WHISPER_MODEL_PATH || overrides?.modelPath
+  if (!modelPath) {
+    for (const dir of candidateModelDirs) {
+      const defaultModelCandidate = path.join(dir, 'ggml-base.en.bin')
+      if (fs.existsSync(defaultModelCandidate)) {
+        modelPath = defaultModelCandidate
+        break
+      }
+      try {
+        const binFiles = fs.readdirSync(dir).filter((f) => f.endsWith('.bin'))
+        if (binFiles.length > 0) {
+          modelPath = path.join(dir, binFiles[0])
+          break
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (!modelPath) {
+      const primaryModelDir = candidateModelDirs[0] || (resourcesPath ? path.join(resourcesPath, 'models') : path.join(rootDir, 'models'))
+      modelPath = path.join(primaryModelDir, 'ggml-base.en.bin')
+    }
+  }
 
   // Determine engine: if binary filename contains 'server', default to server mode unless overridden
   let defaultEngine: 'cli' | 'server' = 'cli'
@@ -195,4 +240,3 @@ export function validateWhisperEnvironment(customConfig?: WhisperConfig): Whispe
     error,
   }
 }
-

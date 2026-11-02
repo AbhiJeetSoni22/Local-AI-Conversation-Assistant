@@ -6,15 +6,17 @@ This document catalogs all project configuration conventions, environment variab
 
 ## 1. Directory Structure Conventions
 
-The application relies on predictable, project-level relative path resolution. This eliminates the need for complex settings screens or hardcoded absolute paths:
+The application relies on predictable, project-level relative path resolution in development and `process.resourcesPath` resolution in packaged distributions:
 
 | Directory | Purpose | Git Status | Default Path Resolution |
 | :--- | :--- | :---: | :--- |
-| **`./bin`** | Local native executables (`whisper-cli.exe`, `whisper-server.exe`) and companion DLLs (`whisper.dll`, `ggml.dll`, `ggml-cpu-*.dll`, etc.). | **Ignored** | `path.join(rootDir, 'bin', 'whisper-cli.exe')` |
-| **`./models`** | Local GGML quantized model weights (`ggml-base.en.bin`). | **Ignored** | `path.join(rootDir, 'models', 'ggml-base.en.bin')` |
+| **`./bin`** | Local native executables (`whisper-cli.exe`, `whisper-server.exe`) and companion DLLs (`whisper.dll`, `ggml.dll`, `ggml-cpu-*.dll`, etc.). In packaged apps, bundled to `resources/bin`. | **Ignored** | `path.join(resourcesPath || rootDir, 'bin', 'whisper-cli.exe')` |
+| **`./models`** | Local GGML quantized model weights (`ggml-base.en.bin`). In packaged apps, bundled to `resources/models`. | **Ignored** | `path.join(resourcesPath || rootDir, 'models', 'ggml-base.en.bin')` |
 | **`./samples`** | Known test and validation audio files (`jfk.wav`). | **Ignored** (`*.wav`) | `path.join(rootDir, 'samples', 'jfk.wav')` |
+| **`./build`** | Build resources, application icons (`icon.ico`, `icon.png`). | **Tracked** | `path.join(rootDir, 'build')` |
 | **`./dist`** | Production build of React frontend SPA. | **Ignored** | `path.join(rootDir, 'dist')` |
 | **`./dist-electron`**| Production bundles of Electron main and preload scripts. | **Ignored** | `path.join(rootDir, 'dist-electron')` |
+| **`./release`** | Packaged Windows executables (`Setup.exe`, `Portable.exe`, `win-unpacked`). | **Ignored** | `path.join(rootDir, 'release')` |
 | **`./electron`** | TypeScript source files for Electron main process. | **Tracked** | N/A |
 | **`./src`** | React + TypeScript frontend source files. | **Tracked** | N/A |
 | **`./scripts`** | Standalone Node/TypeScript validation and test scripts. | **Tracked** | N/A |
@@ -29,15 +31,15 @@ The application can be configured at runtime via standard Windows environment va
 ### Whisper Configuration (Phase 2 & Phase 4)
 | Variable | Type | Default | Description |
 | :--- | :---: | :---: | :--- |
-| **`WHISPER_BIN_PATH`** *(or `WHISPER_PATH`)* | String | `./bin/whisper-cli.exe` | Absolute or relative path to the Whisper executable. |
-| **`WHISPER_MODEL_PATH`** | String | `./models/ggml-base.en.bin` | Absolute or relative path to the GGML model file. |
+| **`WHISPER_BIN_PATH`** *(or `WHISPER_PATH`)* | String | *(auto-resolved)* | Absolute or relative path to the Whisper executable. In packaged mode, resolves automatically from `process.resourcesPath/bin/whisper-cli.exe`. |
+| **`WHISPER_MODEL_PATH`** | String | *(auto-resolved)* | Absolute or relative path to the GGML model file. In packaged mode, resolves automatically from `process.resourcesPath/models/ggml-base.en.bin`. |
 | **`WHISPER_ENGINE`** | String | `cli` | Whisper engine mode: `'cli'` for atomic CLI invocation, or `'server'` for HTTP daemon mode. |
 | **`WHISPER_HOST`** | String | `127.0.0.1` | Host interface for `whisper-server.exe`. |
 | **`WHISPER_PORT`** | Number | `8080` | Port for `whisper-server.exe`. |
 | **`WHISPER_INITIAL_PROMPT`** | String | *(unset / empty)* | Optional initial prompt string passed as `--prompt` to Whisper to condition vocabulary recognition. Defaults to empty for clean baseline decoding. Takes precedence over `WHISPER_USE_VOCAB_PROMPT`. |
-| **`WHISPER_USE_VOCAB_PROMPT`** | String | *(unset)* | Set to `"1"` to opt in to the curated technical-vocabulary prompt (`buildInitialPrompt()`). OFF by default until `npm run diagnose:whisper` shows a measured benefit. |
-| **`DEBUG_WHISPER_TEXT`** | String | *(unset)* | With `DEBUG_AUDIO=1`, additionally logs raw vs cleaned transcript text in the main process. Conversation content: leave unset normally. |
-| **`DEBUG_AUDIO`** | String | *(unset)* | Set to `"1"` to log metadata only (effective Whisper arguments, durations, character counts, flags). No audio, no transcript text. In the renderer the equivalent switch is `localStorage.setItem('DEBUG_AUDIO','1')`. |
+| **`WHISPER_USE_VOCAB_PROMPT`** | String | *(unset)* | Set to `"1"` to opt in to the curated technical-vocabulary prompt (`buildInitialPrompt()`). In the UI, controlled via the "Tech Vocab" action toggle. |
+| **`DEBUG_WHISPER_TEXT`** | String | *(unset)* | With `DEBUG_AUDIO=1`, additionally logs raw vs cleaned transcript text in the main process. Conversation content: leave unset normally for privacy. |
+| **`DEBUG_AUDIO`** | String | *(unset)* | Set to `"1"` to log metadata only (effective Whisper arguments, durations, character counts, flags). In the renderer the equivalent switch is `localStorage.setItem('DEBUG_AUDIO','1')`. |
 
 ### Ollama Configuration (Phase 3)
 | Variable | Type | Default | Description |
@@ -55,91 +57,81 @@ The application can be configured at runtime via standard Windows environment va
 
 ---
 
-## 3. Audio Capture & Chunking Parameters (Phase 4)
+## 3. Packaging & Distribution Settings (`electron-builder.json`)
 
-These parameters govern the renderer microphone capture and chunking pipeline:
+Phase 6 introduces `electron-builder.json` to manage Windows packaging:
 
-| Parameter | Value | Component | Description |
-| :--- | :---: | :--- | :--- |
-| **Microphone Channel Count** | `1` (Mono) | `AudioRecorder` | Audio constraints request single-channel mono with echo cancellation, noise suppression, and auto gain control. |
-| **Internal Target Sample Rate** | `16,000 Hz` | `resampler.ts` | All incoming hardware audio (44.1kHz, 48kHz, etc.) is resampled to 16kHz by one stateful windowed-sinc `StreamingResampler` per recording. |
-| **Segmentation mode** | `speech` (default) / `fixed` | `AudioRecorder` option `segmentation` | `speech`: utterances cut at pauses. `fixed`: legacy 3.0 s (48,000-sample) blind cuts, kept for A/B tests. |
-| **Segmenter thresholds** | frame 20 ms; speech RMS > max(0.010, 3 x noise floor); min speech 200 ms; hangover 700 ms; pre-roll 300 ms; trailing pad 250 ms; soft max 8 s; hard max 12 s | `SpeechSegmenterOptions` | Energy only; tune on real hardware. |
-| **Browser DSP** | echoCancellation, noiseSuppression, autoGainControl all `true` | `AudioRecorder` option `audioConstraints` | Unchanged defaults; candidates for A/B testing. |
-| **Minimum Final Chunk Duration**| `0.5 seconds` | `AudioRecorder` | Exactly 8,000 samples @ 16kHz. When the user clicks Stop, partial audio shorter than 0.5s is discarded to prevent incomplete word artifacts. |
-| **Silence Gating Threshold** | `0.005` RMS | `AudioRecorder` / `wavEncoder` | Buffers with RMS energy below 0.005 are flagged as silent and bypass `whisper-cli.exe` execution. |
-| **Maximum Queue Backpressure** | `3 chunks` | `TranscriptionQueue` | Limits pending transcription backlog to 3 items. If CPU is under heavy load, drops excess unstarted chunks to prevent memory bloat. |
-
----
-
-## 4. Audio & WAV Validation Rules (`electron/wavValidator.ts`)
-
-To ensure stability and protect whisper.cpp from corrupted or malicious inputs, all audio submitted to the transcription engine must satisfy these strict constraints:
-
-| Parameter | Allowed Value | Validation Rule |
-| :--- | :---: | :--- |
-| **File Format** | RIFF / WAVE | Buffer must start with ASCII `'RIFF'` at offset 0 and `'WAVE'` at offset 8. |
-| **Audio Format Code** | `1` (Linear PCM) | Compressed formats (ADPCM, IEEE float, μ-law, A-law) are strictly rejected. |
-| **Channel Count** | 1 (Mono) or 2 (Stereo) | Whisper prefers single-channel mono. Stereo is accepted but mono is strongly recommended. |
-| **Bit Depth** | `16-bit` | Only signed 16-bit little-endian PCM integers (`pcm_s16le`) are supported. |
-| **Sample Rate** | `16,000 Hz` | Whisper natively operates at 16 kHz. Audio recorded at other rates must be resampled. |
-| **Minimum Size** | $\ge$ 44 bytes | Files smaller than the minimal 44-byte WAV header are rejected immediately. |
-| **Maximum Duration** | $\le$ 120 seconds | Chunks exceeding 120 seconds are rejected to prevent memory exhaustion and UI blocking. |
-| **Silence RMS Threshold** | $0.005$ | Calculated across normalized frames $[-1.0, 1.0]$. Frames below $0.005$ are flagged `isSilent: true` and skip Whisper inference. |
-
----
-
-## 5. Prompt Builder Rules & Parameters (`electron/promptBuilder.ts`)
-
-The prompt builder sanitizes untrusted conversation transcripts before passing them to the local Ollama LLM:
-
-| Parameter | Value | Description |
-| :--- | :---: | :--- |
-| **Maximum Transcript Length** | 12,000 chars | If transcript exceeds this limit, older conversation is trimmed while preserving the most recent context and appending a truncation notice. |
-| **Context Fencing** | `--- BEGIN TRANSCRIPT ---` / `--- END TRANSCRIPT ---` | Explicit demarcation boundaries prevent prompt injection and model confusion. |
-| **Default Temperature** | `0.7` | Balances concise response generation with conversational fluidity. |
-| **Speech-Aware Conversational Framing** | System Prompt Instructions | Instructs model to expect real-time speech transcripts, infer speaker intent despite minor acoustic imperfections, explain technical concepts (LangChain, LLMs, RAG) concisely using domain knowledge, answer clear questions directly, state an assumed corrected term briefly, ask one short clarifying question only when genuinely ambiguous, and never comment on transcription errors. |
-
----
-
-## 6. Build & Tooling Configurations
-
-### A. TypeScript (`tsconfig.json`)
-Configured in strict mode to ensure zero type coercion or unintended `any` types:
-- `target`: `ES2022`
-- `module`: `ESNext`
-- `moduleResolution`: `bundler`
-- `strict`: `true`
-- `noUnusedLocals`: `true`
-- `noUnusedParameters`: `true`
-- `noFallthroughCasesInSwitch`: `true`
-
-### B. Vite (`vite.config.ts`)
-Configured with `vite-plugin-electron/simple` for seamless HMR across both React and Electron:
-- **Renderer Entry:** `src/main.tsx` (compiled with `@vitejs/plugin-react`).
-- **Main Process Entry:** `electron/main.ts` (compiled to `dist-electron/main.js`).
-- **Preload Script Entry:** `electron/preload.ts` (compiled to `dist-electron/preload.mjs`).
-
-### C. Package Scripts (`package.json`)
 ```json
-"scripts": {
-  "dev": "vite",
-  "build": "tsc && vite build",
-  "preview": "vite preview",
-  "validate:whisper": "tsx scripts/validate-whisper.ts",
-  "test:whisper": "tsx scripts/test-whisper-failures.ts",
-  "validate:ollama": "tsx scripts/validate-ollama.ts",
-  "test:ollama": "tsx scripts/test-ollama.ts",
-  "test:audio": "tsx scripts/test-phase4-audio.ts",
-  "test:accuracy": "tsx scripts/test-transcription-accuracy.ts"
+{
+  "appId": "com.localai.conversationassistant",
+  "productName": "Local AI Conversation Assistant",
+  "copyright": "Copyright © 2026 Abhijeet Soni",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "bin",
+      "to": "bin",
+      "filter": [
+        "whisper-cli.exe",
+        "whisper-server.exe",
+        "*.dll"
+      ]
+    },
+    {
+      "from": "models",
+      "to": "models",
+      "filter": [
+        "*.bin"
+      ]
+    }
+  ],
+  "win": {
+    "target": [
+      { "target": "nsis", "arch": ["x64"] },
+      { "target": "portable", "arch": ["x64"] }
+    ],
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Local AI Conversation Assistant",
+    "artifactName": "${productName}-Setup-${version}.${ext}"
+  },
+  "portable": {
+    "artifactName": "${productName}-Portable-${version}.${ext}"
+  },
+  "asar": true
 }
 ```
 
-### 1.5 Technical Vocabulary Priming
-| Variable / Setting | Default | Description |
-| :--- | :--- | :--- |
-| **Tech Vocab UI Button** | `On` (persisted) | Toggles technical vocabulary prompt injection during live recording. |
-| `WHISPER_USE_VOCAB_PROMPT` | `0` (UI controlled) | Set to `1` to force technical vocabulary on all CLI transcriptions. |
-| `WHISPER_DISABLE_PROMPT` | `0` | Set to `1` to disable all vocabulary priming unconditionally. |
-| `WHISPER_EXTRA_VOCABULARY` | *(empty)* | Comma-separated list of additional terms to append to the prompt. |
-| `WHISPER_INITIAL_PROMPT` | *(empty)* | Complete custom override string for Whisper's `--prompt` argument. |
+### Packaging Scripts in `package.json`
+- `npm run dist`: Compiles TypeScript, builds Vite bundles, and packages both NSIS setup and Portable executables.
+- `npm run dist:dir`: Fast unpack packaging to `release/win-unpacked` for local validation.
+- `npm run dist:nsis`: Builds the standard NSIS installer only.
+- `npm run dist:portable`: Builds the standalone portable executable only.
+- `npm run icons`: Re-generates multi-resolution `build/icon.ico` and `build/icon.png` using PowerShell and .NET `System.Drawing`.
+
+---
+
+## 4. Audio Capture & Chunking Parameters (Phase 4 & 5)
+
+| Parameter | Value | Component | Description |
+| :--- | :---: | :--- | :--- |
+| **Microphone Channel Count** | `1` (Mono) | `AudioRecorder` | Requests single-channel mono with echo cancellation, noise suppression, and auto gain control. |
+| **Internal Target Sample Rate** | `16,000 Hz` | `resampler.ts` | All incoming hardware audio (44.1kHz, 48kHz, etc.) is resampled to 16kHz by one stateful windowed-sinc `StreamingResampler` per recording. |
+| **Segmentation mode** | `speech` (default) | `AudioRecorder` option `segmentation` | `speech`: cuts utterances dynamically at natural pauses. |
+| **Segmenter thresholds** | `minSpeechRms`: `0.012`; `minSpeechMs`: `260ms`; `hangoverMs`: `800ms`; `preRollMs`: `300ms`; `trailingPadMs`: `200ms` | `SpeechSegmenterOptions` | Suppresses trailing AGC noise and clicks while preserving deliberate speech pauses. |
+| **Minimum Final Chunk Duration**| `0.5 seconds` | `AudioRecorder` | Exactly 8,000 samples @ 16kHz. On Stop, trailing partial audio shorter than 0.5s is discarded to prevent cut-off word artifacts. |
+| **Silence Gating Threshold** | `0.005` RMS | `AudioRecorder` / `wavEncoder` | Buffers with RMS energy below 0.005 are flagged as silent and bypass `whisper-cli.exe` execution. |
+| **Maximum Queue Backpressure** | `3 chunks` | `TranscriptionQueue` | Limits pending transcription backlog to 3 items. If CPU is under heavy load, drops excess unstarted chunks to prevent memory bloat. |
