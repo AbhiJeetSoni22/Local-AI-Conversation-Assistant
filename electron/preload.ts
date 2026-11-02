@@ -15,7 +15,9 @@ const electronApi = {
     sessionId: string
     chunkIndex: number
     isFinal?: boolean
+    initialPrompt?: string
   }) => ipcRenderer.invoke('whisper:transcribe-chunk', data),
+  getTechnicalPrompt: () => ipcRenderer.invoke('whisper:get-technical-prompt'),
 
   // Ollama (Phase 3)
   getOllamaReadiness: () => ipcRenderer.invoke('ollama:get-readiness'),

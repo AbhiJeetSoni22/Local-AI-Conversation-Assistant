@@ -12,11 +12,18 @@
  */
 
 export const DEFAULT_TECHNICAL_VOCABULARY: readonly string[] = [
-  'LangChain',
-  'LLMs',
-  'RAG',
-  'Python',
   'React',
+  'FastAPI',
+  'PostgreSQL',
+  'Retrieval-Augmented Generation',
+  'RAG',
+  'LangChain',
+  'API endpoints',
+  'Postman',
+  'Docker',
+  'NGINX',
+  'LLMs',
+  'Python',
   'TypeScript',
 ] as const
 
@@ -153,7 +160,9 @@ export function cleanWhisperOutput(raw: string): CleanedWhisperOutput {
  * 2. If WHISPER_INITIAL_PROMPT is set, returns that custom prompt string.
  * 3. Otherwise, combines DEFAULT_TECHNICAL_VOCABULARY with any extra terms from
  *    WHISPER_EXTRA_VOCABULARY (comma-separated).
- * 4. Bounds the prompt length to 200 tokens / ~800 chars to fit within Whisper's
+ * 4. Formats as clean, direct comma-separated terms ending with a period to prime
+ *    the dictionary without conversational bias.
+ * 5. Bounds the prompt length to 200 tokens / ~800 chars to fit within Whisper's
  *    half text context limit (max n_text_ctx / 2 = 224 tokens for base model).
  */
 export function buildInitialPrompt(options?: {
@@ -197,15 +206,10 @@ export function buildInitialPrompt(options?: {
     }
   }
 
-  // Format as natural conversational context to avoid acronym collisions
-  let prompt: string
-  if (uniqueTerms.length <= 1) {
-    prompt = uniqueTerms.join('') + '.'
-  } else {
-    const last = uniqueTerms[uniqueTerms.length - 1]
-    const rest = uniqueTerms.slice(0, -1)
-    prompt = `Discussion regarding ${rest.join(', ')}, and ${last}.`
-  }
+  // Format as clean, non-conversational comma-separated terms ending with period.
+  // Direct vocabulary listing primes Whisper's internal dictionary without
+  // conversational priming that can induce hallucinated dialogue.
+  const prompt = `${uniqueTerms.join(', ')}.`
 
   // Safe truncation ceiling: ~800 characters
   if (prompt.length > 800) {

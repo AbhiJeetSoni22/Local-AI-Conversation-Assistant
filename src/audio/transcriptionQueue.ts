@@ -18,6 +18,7 @@ export interface TranscriptionQueueOptions {
     sessionId: string
     chunkIndex: number
     isFinal?: boolean
+    initialPrompt?: string
   }) => Promise<TranscriptionChunkResult>
   /** Callback invoked when a segment is successfully transcribed */
   onSegment: (segment: {
@@ -42,6 +43,15 @@ export class TranscriptionQueue {
   /** Keys (sessionId:chunkIndex) already accepted, so a re-submitted chunk is never transcribed twice. */
   private acceptedKeys = new Set<string>()
   private droppedCount = 0
+  private initialPrompt?: string
+
+  public setInitialPrompt(prompt?: string): void {
+    this.initialPrompt = prompt
+  }
+
+  public getInitialPrompt(): string | undefined {
+    return this.initialPrompt
+  }
 
   constructor(options: TranscriptionQueueOptions) {
     this.options = {
@@ -147,6 +157,7 @@ export class TranscriptionQueue {
         sessionId: chunk.sessionId,
         chunkIndex: chunk.chunkIndex,
         isFinal: chunk.isFinal,
+        initialPrompt: this.initialPrompt,
       })
 
       // Verify session is still active when response returns

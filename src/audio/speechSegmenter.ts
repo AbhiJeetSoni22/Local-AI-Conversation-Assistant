@@ -37,13 +37,13 @@ export interface SpeechSegmenterOptions {
   sampleRate?: number
   /** Analysis frame length in ms (default 20). */
   frameMs?: number
-  /** Absolute minimum frame RMS to count as speech (default 0.010, about -40 dBFS). */
+  /** Absolute minimum frame RMS to count as speech (default 0.012, about -38 dBFS). */
   minSpeechRms?: number
   /** Frame RMS must also exceed noiseFloor * this ratio (default 3.0, about +9.5 dB). */
   speechToNoiseRatio?: number
-  /** Minimum total speech-level audio for a segment to be kept (default 200 ms). */
+  /** Minimum total speech-level audio for a segment to be kept (default 260 ms). */
   minSpeechMs?: number
-  /** Continuous non-speech that ends an utterance (default 700 ms). */
+  /** Continuous non-speech that ends an utterance (default 800 ms). */
   hangoverMs?: number
   /** Audio kept before the first speech frame so soft onsets are not clipped (default 300 ms). */
   prerollMs?: number
@@ -80,10 +80,10 @@ export class SpeechSegmenter {
     this.o = {
       sampleRate: options.sampleRate ?? 16000,
       frameMs: options.frameMs ?? 20,
-      minSpeechRms: options.minSpeechRms ?? 0.01,
+      minSpeechRms: options.minSpeechRms ?? 0.012,
       speechToNoiseRatio: options.speechToNoiseRatio ?? 3.0,
-      minSpeechMs: options.minSpeechMs ?? 200,
-      hangoverMs: options.hangoverMs ?? 700,
+      minSpeechMs: options.minSpeechMs ?? 260,
+      hangoverMs: options.hangoverMs ?? 800,
       prerollMs: options.prerollMs ?? 300,
       trailingPadMs: options.trailingPadMs ?? 250,
       softMaxSec: options.softMaxSec ?? 8,

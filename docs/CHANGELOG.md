@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Microphone Accuracy & Trailing Hallucination Tuning] - 2026-11-02
+
+### Fixed
+- **Whisper Trailing Outro Hallucinations ("All right, how would you look again? Bye bye.")**:
+  - Identified root cause in live microphone capture: when speakers slow down or finish speaking, trailing room noise / AGC-boosted ambient hiss and mouse clicks on "Stop" were captured into sub-second chunks and sent to Whisper. With near-zero speech energy, Whisper's temperature fallback (0.0 to 1.0) sampled conversational YouTube outro tokens from its training distribution.
+  - Tuned `SpeechSegmenter` defaults in `src/audio/speechSegmenter.ts`:
+    - Raised `minSpeechRms` to `0.012` (about -38 dBFS) to prevent AGC room hiss from triggering false speech starts.
+    - Raised `minSpeechMs` to `260ms` (13 frames) to reject transient clicks, bumps, and quick mouth breaths.
+    - Increased `hangoverMs` to `800ms` to prevent slow speech with natural pauses from being prematurely fragmented.
+    - Compacted `trailingPadMs` to prevent silence tails from inviting outro hallucinations.
+- **Technical Vocabulary Misrecognition ("FastAPI" -> "Fast API", "NGINX" -> "Yanks", "LangChain" -> "line chain")**:
+  - Expanded `DEFAULT_TECHNICAL_VOCABULARY` in `electron/vocabularyConfig.ts` to include `React`, `FastAPI`, `PostgreSQL`, `Retrieval-Augmented Generation`, `RAG`, `LangChain`, `API endpoints`, `Postman`, `Docker`, `NGINX`, `LLMs`, `Python`, `TypeScript`.
+  - Replaced the conversational prompt formatting (`"Discussion regarding..."`) with a clean, direct token list (`"React, FastAPI, PostgreSQL, ... ."`), eliminating conversational bias that previously induced video/podcast boilerplate.
+  - Added opt-in "Tech Vocab" toggle in the main action bar of `src/App.tsx` (persisted in localStorage and indicated via an active pill), allowing users to enable technical terminology priming or use standard baseline speech recognition.
+  - Extended `transcribeAudioChunk` IPC bridge and `WhisperService` to accept session/chunk `initialPrompt` overrides cleanly without modifying default CLI baseline test assertions.
+
+### Verified
+- `npm run test:whisper`: 18/18 passed.
+- `npm run test:audio`: 22/22 passed.
+- `npm run test:accuracy`: 46/46 passed.
+- `npm run test:pipeline`: 98/98 passed.
+- `npm run test:phase5`: 42/42 passed.
+- Total automated tests: 226/226 passed (0 failures).
+- Production build: `npm run build` passed cleanly.
+
 ## [Phase 5: End-to-End Stabilization] - 2026-11-02
 
 ### Added

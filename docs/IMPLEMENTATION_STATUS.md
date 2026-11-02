@@ -39,6 +39,7 @@ The following features have been fully implemented, built, and verified with aut
 | **Ollama Error Recovery & Retry** | `Verified` | `src/App.tsx`, `src/index.css` | Generation failure preserves transcript text and presents dedicated "Retry Answer" action without re-recording audio. | `test:phase5` Suite 4 (7 assertions). | Full transcript safety across timeouts and network dropouts. |
 | **7 Distinguishable UI States** | `Verified` | `src/App.tsx`, `src/index.css` | App state machine strictly distinguishes `Ready`, `Recording`, `Transcribing`, `Generating`, `Completed`, `Error`, and `Cancelled`. | `test:phase5` Suite 5 (18 assertions). | Zero contradictory UI states. |
 | **Phase 5 Automated Test Suite** | `Verified` | `scripts/test-phase5-stabilization.ts` | `npm run test:phase5` passes 42 / 42 tests covering readiness, audio boundaries, transcript editing, retry, and UI states. | Deterministic mock server and synthetic audio. | Integrated in CI/package.json. |
+| **Technical Vocabulary & Hallucination Tuning** | `Verified` | `electron/vocabularyConfig.ts`, `src/audio/speechSegmenter.ts`, `src/App.tsx` | Evaluated against diagnostic audio fixtures; 226 / 226 unit tests passing; zero false positives on plain English. | Physical microphone testing recommended to confirm acoustic tuning. | Verify with user microphone. |
 
 ---
 

@@ -134,3 +134,12 @@ Configured with `vite-plugin-electron/simple` for seamless HMR across both React
   "test:accuracy": "tsx scripts/test-transcription-accuracy.ts"
 }
 ```
+
+### 1.5 Technical Vocabulary Priming
+| Variable / Setting | Default | Description |
+| :--- | :--- | :--- |
+| **Tech Vocab UI Button** | `On` (persisted) | Toggles technical vocabulary prompt injection during live recording. |
+| `WHISPER_USE_VOCAB_PROMPT` | `0` (UI controlled) | Set to `1` to force technical vocabulary on all CLI transcriptions. |
+| `WHISPER_DISABLE_PROMPT` | `0` | Set to `1` to disable all vocabulary priming unconditionally. |
+| `WHISPER_EXTRA_VOCABULARY` | *(empty)* | Comma-separated list of additional terms to append to the prompt. |
+| `WHISPER_INITIAL_PROMPT` | *(empty)* | Complete custom override string for Whisper's `--prompt` argument. |

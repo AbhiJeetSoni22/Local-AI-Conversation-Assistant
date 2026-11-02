@@ -38,6 +38,14 @@ export default function App() {
   const [validationError, setValidationError] = useState<string | null>(null)
   const [generationError, setGenerationError] = useState<string | null>(null)
   const [copied, setCopied] = useState<boolean>(false)
+  const [techVocabEnabled, setTechVocabEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('TECH_VOCAB') !== 'false'
+    } catch {
+      return true
+    }
+  })
+  const [technicalPrompt, setTechnicalPrompt] = useState<string>('')
 
   // Phase 4 Audio Recorder and Queue References
   const audioRecorderRef = useRef<AudioRecorder | null>(null)
@@ -122,6 +130,15 @@ export default function App() {
     })
     transcriptionQueueRef.current = queue
 
+    if (window.electronApi?.getTechnicalPrompt) {
+      window.electronApi.getTechnicalPrompt().then((p) => {
+        setTechnicalPrompt(p)
+        if (techVocabEnabled) {
+          queue.setInitialPrompt(p)
+        }
+      }).catch(() => {})
+    }
+
     if (window.electronApi) {
       // 2. Fetch app status
       window.electronApi.getStatus()
@@ -186,6 +203,15 @@ export default function App() {
     }
   }, [])
 
+  const handleToggleTechVocab = () => {
+    const next = !techVocabEnabled
+    setTechVocabEnabled(next)
+    try {
+      localStorage.setItem('TECH_VOCAB', next ? 'true' : 'false')
+    } catch {}
+    transcriptionQueueRef.current?.setInitialPrompt(next ? technicalPrompt : undefined)
+  }
+
   const handleStart = async () => {
     setValidationError(null)
     setIsEditingTranscript(false)
@@ -201,6 +227,7 @@ export default function App() {
     if (status === 'Listening' || isGenerating || transcriptionBusy) return
 
     try {
+      transcriptionQueueRef.current?.setInitialPrompt(techVocabEnabled ? technicalPrompt : undefined)
       // Defaults: pause-aligned utterance segmentation. Tuning/A-B options (see docs/TROUBLESHOOTING.md):
       //   segmentation: 'fixed'                       -> legacy blind cuts every chunkDurationSec
       //   segmenter: { minSpeechRms: 0.008, ... }     -> speech-energy thresholds
@@ -527,6 +554,27 @@ export default function App() {
               <span>Cancel</span>
             </button>
           )}
+
+          {/* Technical Vocabulary Opt-in Toggle */}
+          <button
+            id="btn-tech-vocab"
+            className={`btn btn-tech-vocab ${techVocabEnabled ? 'active' : ''}`}
+            onClick={handleToggleTechVocab}
+            disabled={status === 'Listening' || isGenerating || transcriptionBusy}
+            title={
+              techVocabEnabled
+                ? 'Technical Vocabulary: Enabled (primes Whisper for React, FastAPI, PostgreSQL, LangChain, Docker, NGINX, etc.)'
+                : 'Technical Vocabulary: Disabled (standard baseline speech recognition)'
+            }
+            aria-label="Toggle Technical Vocabulary"
+            aria-pressed={techVocabEnabled}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="16 18 22 12 16 6" />
+              <polyline points="8 6 2 12 8 18" />
+            </svg>
+            <span>Tech Vocab: {techVocabEnabled ? 'On' : 'Off'}</span>
+          </button>
         </div>
 
         {/* Context Hint */}

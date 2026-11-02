@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import type { BrowserWindow as BrowserWindowType } from 'electron'
 import { whisperService } from './whisperService'
 import { ollamaService } from './ollamaService'
+import { buildInitialPrompt } from './vocabularyConfig'
 
 const require = createRequire(import.meta.url)
 const { app, BrowserWindow, ipcMain } = require('electron') as {
@@ -78,13 +79,18 @@ ipcMain.handle('whisper:validate', async () => {
   return await whisperService.getReadiness()
 })
 
+ipcMain.handle('whisper:get-technical-prompt', async () => {
+  return buildInitialPrompt()
+})
+
 ipcMain.handle('whisper:transcribe-chunk', async (_event, payload: {
   audioBuffer: Uint8Array | ArrayBuffer
   sessionId: string
   chunkIndex: number
   isFinal?: boolean
+  initialPrompt?: string
 }) => {
-  const { audioBuffer, sessionId, chunkIndex, isFinal } = payload || {}
+  const { audioBuffer, sessionId, chunkIndex, isFinal, initialPrompt } = payload || {}
 
   if (!audioBuffer) {
     return {
@@ -103,7 +109,7 @@ ipcMain.handle('whisper:transcribe-chunk', async (_event, payload: {
       ? audioBuffer
       : Buffer.from(audioBuffer as ArrayBuffer)
 
-    const result = await whisperService.transcribe(buffer)
+    const result = await whisperService.transcribe(buffer, { initialPrompt })
     const cleanedText = result.text.trim()
 
     // Metadata only (never transcript text) and only when explicitly enabled.

@@ -161,6 +161,25 @@ This document catalogs common issues, root causes, diagnostic steps, and verifie
 
 ---
 
+
+### Issue 3.8: Technical terms misrecognized (e.g., "NGINX" as "Yanks", "FastAPI" as "Fast API")
+- **Root Cause:** Small speech recognition models like `ggml-base.en.bin` (142MB) lack specialized domain context for modern software proper nouns without prior decoder conditioning.
+- **Solution:**
+  1. Toggle the **Tech Vocab** button in the top action bar to `On`. This primes Whisper's internal dictionary with curated terms: React, FastAPI, PostgreSQL, Retrieval-Augmented Generation, LangChain, API endpoints, Postman, Docker, NGINX, Python, TypeScript.
+  2. For custom words, set an environment variable before launching:
+     ```powershell
+     $env:WHISPER_EXTRA_VOCABULARY="Kubernetes, GraphQL, Redis"
+     npm run dev
+     ```
+  3. Alternatively, use the **Edit** button on the Conversation Transcript panel to correct any misrecognized words before clicking "Suggest Answer".
+
+### Issue 3.9: Unrelated trailing speech or outro phrases ("Bye bye", "All right...")
+- **Root Cause:** When audio finishes with ambient room sound or a breath, and the user waits before clicking Stop, Whisper's temperature fallback (0.0 -> 1.0) on near-zero speech energy samples common YouTube outro boilerplate.
+- **Solution:**
+  1. `SpeechSegmenter` is tuned with `minSpeechRms: 0.012`, `minSpeechMs: 260ms`, and `hangoverMs: 800ms` to reject clicks and breaths.
+  2. Speak clearly at normal volume into the microphone, pause briefly, and click Stop.
+  3. Avoid moving the microphone or clicking loudly while recording is active.
+
 ## 4. Audio & WAV Validation Errors
 
 ### Issue 4.1: `Invalid WAV header: expected "RIFF", found ...`

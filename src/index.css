@@ -1093,3 +1093,25 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Technical Vocabulary Toggle Button */
+.btn-tech-vocab {
+  background-color: var(--bg-surface-2);
+  border-color: var(--border-medium);
+  color: var(--text-secondary);
+}
+.btn-tech-vocab:hover:not(:disabled) {
+  background-color: var(--bg-surface-hover);
+  color: var(--text-primary);
+  border-color: var(--border-bright);
+}
+.btn-tech-vocab.active {
+  background-color: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #a5b4fc;
+}
+.btn-tech-vocab.active:hover:not(:disabled) {
+  background-color: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #c7d2fe;
+}

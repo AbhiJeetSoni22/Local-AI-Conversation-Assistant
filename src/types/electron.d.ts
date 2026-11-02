@@ -50,7 +50,9 @@ export interface ElectronApi {
     sessionId: string
     chunkIndex: number
     isFinal?: boolean
+    initialPrompt?: string
   }) => Promise<TranscriptionChunkResult>
+  getTechnicalPrompt?: () => Promise<string>
 
   // Ollama
   getOllamaReadiness: () => Promise<OllamaReadiness>

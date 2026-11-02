@@ -218,7 +218,7 @@ export class WhisperService {
    */
   public async transcribe(
     audioInput: string | Buffer,
-    options: { timeoutMs?: number } = {}
+    options: { timeoutMs?: number; initialPrompt?: string } = {}
   ): Promise<TranscriptionResult> {
     const timeoutMs = options.timeoutMs ?? 30000
 
@@ -275,9 +275,9 @@ export class WhisperService {
 
     try {
       if (this.config.engine === 'server') {
-        return await this.transcribeViaServer(audioFilePath, timeoutMs)
+        return await this.transcribeViaServer(audioFilePath, timeoutMs, options.initialPrompt)
       } else {
-        return await this.transcribeViaCli(audioFilePath, timeoutMs)
+        return await this.transcribeViaCli(audioFilePath, timeoutMs, options.initialPrompt)
       }
     } finally {
       if (isTempFile && fs.existsSync(audioFilePath)) {
@@ -295,7 +295,8 @@ export class WhisperService {
    */
   private async transcribeViaCli(
     audioFilePath: string,
-    timeoutMs: number
+    timeoutMs: number,
+    initialPromptOverride?: string
   ): Promise<TranscriptionResult> {
     const startTime = Date.now()
     const tempOutputDir = os.tmpdir()
@@ -303,7 +304,8 @@ export class WhisperService {
     const outputPrefix = path.join(tempOutputDir, fileId)
     const expectedJsonFile = `${outputPrefix}.json`
 
-    const args = buildWhisperCliArgs(this.config, audioFilePath, outputPrefix)
+    const effectiveConfig = initialPromptOverride !== undefined ? { ...this.config, initialPrompt: initialPromptOverride } : this.config
+    const args = buildWhisperCliArgs(effectiveConfig, audioFilePath, outputPrefix)
 
     return new Promise((resolve, reject) => {
       let settled = false
@@ -420,7 +422,8 @@ export class WhisperService {
    */
   private async transcribeViaServer(
     audioFilePath: string,
-    timeoutMs: number
+    timeoutMs: number,
+    initialPromptOverride?: string
   ): Promise<TranscriptionResult> {
     const startTime = Date.now()
     const url = `http://${this.config.serverHost}:${this.config.serverPort}/inference`
@@ -430,8 +433,9 @@ export class WhisperService {
     formData.append('file', new Blob([fileBuffer], { type: 'audio/wav' }), 'audio.wav')
     formData.append('response_format', 'json')
 
-    if (this.config.initialPrompt && this.config.initialPrompt.trim()) {
-      formData.append('prompt', this.config.initialPrompt.trim())
+    const effectivePrompt = initialPromptOverride !== undefined ? initialPromptOverride : this.config.initialPrompt
+    if (effectivePrompt && effectivePrompt.trim()) {
+      formData.append('prompt', effectivePrompt.trim())
     }
 
     const controller = new AbortController()
